@@ -16,10 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Remove root Cargo.toml so Tauri finds src-tauri only
-        shell: bash
-        run: rm -f Cargo.toml
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -33,28 +29,56 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Assemble src-tauri structure
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli@2.5.0
+
+      - name: Build project structure
         shell: python
         run: |
-          import shutil, textwrap
+          import shutil, textwrap, json
           from pathlib import Path
 
-          for d in ["src-tauri/src","src-tauri/capabilities","src-tauri/icons","dist"]:
+          for d in ["src-tauri/src", "src-tauri/capabilities", "src-tauri/icons", "dist"]:
               Path(d).mkdir(parents=True, exist_ok=True)
 
-          shutil.copy("lib.rs",          "src-tauri/src/lib.rs")
-          shutil.copy("main.rs",         "src-tauri/src/main.rs")
-          shutil.copy("build.rs",        "src-tauri/build.rs")
-          shutil.copy("tauri.conf.json", "src-tauri/tauri.conf.json")
-          shutil.copy("default.json",    "src-tauri/capabilities/default.json")
-          shutil.copy("index.html",      "dist/index.html")
+          copies = {
+              "lib.rs":       "src-tauri/src/lib.rs",
+              "main.rs":      "src-tauri/src/main.rs",
+              "build.rs":     "src-tauri/build.rs",
+              "default.json": "src-tauri/capabilities/default.json",
+              "index.html":   "dist/index.html",
+          }
+          for src, dst in copies.items():
+              if Path(src).exists():
+                  shutil.copy(src, dst)
+
+          tauri_conf = {
+            "$schema": "https://schema.tauri.app/config/2",
+            "productName": "ProjectFlow",
+            "version": "4.1.0",
+            "identifier": "com.projectflow.app",
+            "build": { "frontendDist": "../dist" },
+            "app": {
+              "windows": [],
+              "security": { "csp": None, "dangerousDisableAssetCspModification": True },
+              "withGlobalTauri": True
+            },
+            "bundle": {
+              "active": True,
+              "targets": "all",
+              "icon": ["icons/32x32.png","icons/128x128.png","icons/128x128@2x.png","icons/icon.icns","icons/icon.ico"],
+              "publisher": "FSBL",
+              "category": "Productivity"
+            }
+          }
+          Path("src-tauri/tauri.conf.json").write_text(json.dumps(tauri_conf, indent=2))
 
           cargo = textwrap.dedent("""
               [package]
@@ -83,11 +107,9 @@ jobs:
               serde = { version = "1", features = ["derive"] }
               serde_json = "1"
           """).strip()
-
           Path("src-tauri/Cargo.toml").write_text(cargo)
-          print("Files in src-tauri:")
-          for f in sorted(Path("src-tauri").rglob("*")):
-              print(" ", f)
+          Path("Cargo.toml").write_text('[workspace]\nmembers = ["src-tauri"]\nresolver = "2"\n')
+          print("Structure ready")
 
       - name: Generate icons
         run: |
@@ -99,26 +121,40 @@ jobs:
         run: |
           URL="${{ secrets.RAILWAY_URL }}"
           if [ -n "$URL" ]; then
-            sed -i "s|https://web-production-3431b.up.railway.app|${URL}|g" src-tauri/src/lib.rs
-            echo "Patched: ${URL}"
+            sed -i "s|https://web-production-bde95.up.railway.app|${URL}|g" src-tauri/src/lib.rs
+            echo "Patched to: ${URL}"
+          else
+            echo "Using default URL already in lib.rs"
           fi
 
-      - name: Install npm deps
-        run: npm install
+      - name: Build Tauri app
+        working-directory: src-tauri
+        run: tauri build --target x86_64-pc-windows-msvc
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ""
 
-      - name: Build and release
-        uses: tauri-apps/tauri-action@v0
+      - name: Upload .exe as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProjectFlow-Windows
+          path: |
+            target/x86_64-pc-windows-msvc/release/bundle/nsis/ProjectFlow_4.1.0_x64-setup.exe
+            target/x86_64-pc-windows-msvc/release/bundle/msi/ProjectFlow_4.1.0_x64_en-US.msi
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v4.1.0
+          name: "ProjectFlow v4.1.0"
+          body: |
+            ## ProjectFlow Desktop v4.1.0
+            Download **ProjectFlow_4.1.0_x64-setup.exe** and run it — no setup needed.
+          files: |
+            target/x86_64-pc-windows-msvc/release/bundle/nsis/ProjectFlow_4.1.0_x64-setup.exe
+            target/x86_64-pc-windows-msvc/release/bundle/msi/ProjectFlow_4.1.0_x64_en-US.msi
+          draft: false
+          prerelease: false
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ""
-        with:
-          projectPath: .
-          tagName: v__VERSION__
-          releaseName: "ProjectFlow v__VERSION__"
-          releaseBody: |
-            ## ProjectFlow Desktop v__VERSION__
-            Download **ProjectFlow_x64-setup.exe** and run it.
-            First launch asks for your Railway URL once — then never again.
-          releaseDraft: false
-          prerelease: false
-          args: --target x86_64-pc-windows-msvc

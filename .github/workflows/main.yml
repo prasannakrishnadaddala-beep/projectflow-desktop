@@ -36,6 +36,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli@^2
+
       - name: Assemble src-tauri structure
         shell: python
         run: |
@@ -99,37 +102,39 @@ jobs:
             echo "Patched: ${URL}"
           fi
 
-      - name: Install npm deps
-        run: npm install
-
       - name: Build Tauri app
-        run: npm run tauri build -- --target x86_64-pc-windows-msvc
+        run: tauri build --target x86_64-pc-windows-msvc
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
 
-      - name: Find built installer
+      - name: Find built files
         shell: bash
-        id: find_installer
+        id: find_files
         run: |
-          EXE=$(find src-tauri/target -name "*.exe" | grep -v deps | grep -v incremental | head -1)
-          MSI=$(find src-tauri/target -name "*.msi" | head -1)
-          echo "exe=$EXE" >> $GITHUB_OUTPUT
-          echo "msi=$MSI" >> $GITHUB_OUTPUT
-          echo "Found EXE: $EXE"
-          echo "Found MSI: $MSI"
+          EXE=$(find src-tauri/target -name "*setup*.exe" 2>/dev/null | head -1)
+          MSI=$(find src-tauri/target -name "*.msi" 2>/dev/null | head -1)
+          NSIS=$(find src-tauri/target -name "*.exe" | grep -i nsis | head -1)
+          echo "Found:"
+          find src-tauri/target/x86_64-pc-windows-msvc/release/bundle -type f 2>/dev/null || true
+          BUNDLE_EXE=$(find src-tauri/target -path "*/bundle/*" -name "*.exe" 2>/dev/null | head -1)
+          BUNDLE_MSI=$(find src-tauri/target -path "*/bundle/*" -name "*.msi" 2>/dev/null | head -1)
+          echo "bundle_exe=$BUNDLE_EXE" >> $GITHUB_OUTPUT
+          echo "bundle_msi=$BUNDLE_MSI" >> $GITHUB_OUTPUT
+          echo "EXE: $BUNDLE_EXE"
+          echo "MSI: $BUNDLE_MSI"
 
-      - name: Create GitHub Release
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v4.1.0
           name: "ProjectFlow v4.1.0"
           body: |
             ## ProjectFlow Desktop v4.1.0
-            Download **ProjectFlow_x64-setup.exe** below and run it.
+            Download **ProjectFlow_x64-setup.exe** or **.msi** below and run it.
             First launch asks for your Railway URL once — then never again.
           files: |
-            ${{ steps.find_installer.outputs.exe }}
-            ${{ steps.find_installer.outputs.msi }}
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.msi
           draft: false
           prerelease: false
         env:

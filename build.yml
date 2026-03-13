@@ -36,6 +36,25 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Assemble src-tauri folder from flat files
+        shell: bash
+        run: |
+          mkdir -p src-tauri/src
+          mkdir -p src-tauri/capabilities
+          mkdir -p dist
+
+          # Move Rust source files into correct Tauri locations
+          cp lib.rs        src-tauri/src/lib.rs
+          cp main.rs       src-tauri/src/main.rs
+          cp Cargo.toml    src-tauri/Cargo.toml
+          cp build.rs      src-tauri/build.rs
+          cp tauri.conf.json src-tauri/tauri.conf.json  2>/dev/null || cp build-config.json src-tauri/tauri.conf.json
+          cp default.json  src-tauri/capabilities/default.json
+          cp index.html    dist/index.html
+
+          echo "src-tauri structure:"
+          find src-tauri -type f
+
       - name: Generate icons from icon.png
         run: |
           pip install Pillow --quiet

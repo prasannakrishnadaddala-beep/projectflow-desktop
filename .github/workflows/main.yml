@@ -16,6 +16,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Remove root Cargo.toml so Tauri finds src-tauri only
+        shell: bash
+        run: rm -f Cargo.toml
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -39,14 +43,12 @@ jobs:
       - name: Assemble src-tauri structure
         shell: python
         run: |
-          import os, shutil
+          import shutil, textwrap
           from pathlib import Path
 
-          # Create folders
           for d in ["src-tauri/src","src-tauri/capabilities","src-tauri/icons","dist"]:
               Path(d).mkdir(parents=True, exist_ok=True)
 
-          # Copy flat files into correct Tauri locations
           shutil.copy("lib.rs",          "src-tauri/src/lib.rs")
           shutil.copy("main.rs",         "src-tauri/src/main.rs")
           shutil.copy("build.rs",        "src-tauri/build.rs")
@@ -54,38 +56,38 @@ jobs:
           shutil.copy("default.json",    "src-tauri/capabilities/default.json")
           shutil.copy("index.html",      "dist/index.html")
 
-          # Write correct Cargo.toml for src-tauri (not root)
-          cargo = """[package]
-          name = "projectflow"
-          version = "4.1.0"
-          description = "ProjectFlow Desktop"
-          edition = "2021"
+          cargo = textwrap.dedent("""
+              [package]
+              name = "projectflow"
+              version = "4.1.0"
+              description = "ProjectFlow Desktop"
+              edition = "2021"
 
-          [lib]
-          name = "projectflow_lib"
-          crate-type = ["staticlib", "cdylib", "rlib"]
-          path = "src/lib.rs"
+              [lib]
+              name = "projectflow_lib"
+              crate-type = ["staticlib", "cdylib", "rlib"]
+              path = "src/lib.rs"
 
-          [[bin]]
-          name = "projectflow"
-          path = "src/main.rs"
+              [[bin]]
+              name = "projectflow"
+              path = "src/main.rs"
 
-          [build-dependencies]
-          tauri-build = { version = "2", features = [] }
+              [build-dependencies]
+              tauri-build = { version = "2", features = [] }
 
-          [dependencies]
-          tauri = { version = "2", features = ["tray-icon", "image-ico", "image-png"] }
-          tauri-plugin-notification = "2"
-          tauri-plugin-shell = "2"
-          tauri-plugin-http = "2"
-          serde = { version = "1", features = ["derive"] }
-          serde_json = "1"
-          """
-          import textwrap
-          Path("src-tauri/Cargo.toml").write_text(textwrap.dedent(cargo))
+              [dependencies]
+              tauri = { version = "2", features = ["tray-icon", "image-ico", "image-png"] }
+              tauri-plugin-notification = "2"
+              tauri-plugin-shell = "2"
+              tauri-plugin-http = "2"
+              serde = { version = "1", features = ["derive"] }
+              serde_json = "1"
+          """).strip()
 
+          Path("src-tauri/Cargo.toml").write_text(cargo)
+          print("Files in src-tauri:")
           for f in sorted(Path("src-tauri").rglob("*")):
-              print(f)
+              print(" ", f)
 
       - name: Generate icons
         run: |
@@ -110,6 +112,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ""
         with:
+          projectPath: .
           tagName: v__VERSION__
           releaseName: "ProjectFlow v__VERSION__"
           releaseBody: |

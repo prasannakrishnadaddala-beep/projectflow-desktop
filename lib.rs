@@ -41,74 +41,6 @@ fn get_url(app: &AppHandle) -> String {
     }
 }
 
-// ── Auto-updater ──────────────────────────────────────────────────────────────
-
-fn check_for_updates(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        use tauri_plugin_updater::UpdaterExt;
-        let Ok(updater) = app.updater() else { return };
-        let Ok(Some(update)) = updater.check().await else { return };
-
-        let version = update.version.clone();
-        let handle = app.clone();
-
-        // Show update dialog in a new small window
-        let script = format!(r#"
-window.addEventListener('DOMContentLoaded', () => {{
-    document.open();
-    document.write(`<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<style>
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{font-family:system-ui,sans-serif;background:#0d0d1a;color:#fff;
-     display:flex;align-items:center;justify-content:center;height:100vh;padding:24px;text-align:center}}
-.card{{width:100%;max-width:360px}}
-h2{{font-size:16px;font-weight:700;margin-bottom:8px;color:#aaff00}}
-p{{font-size:13px;color:rgba(255,255,255,.6);margin-bottom:20px;line-height:1.5}}
-.btns{{display:flex;gap:10px}}
-button{{flex:1;padding:10px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer}}
-.yes{{background:#aaff00;color:#0d0d1a}}
-.no{{background:rgba(255,255,255,.1);color:#fff}}
-</style></head>
-<body><div class="card">
-<h2>⚡ Update Available</h2>
-<p>ProjectFlow <strong>{version}</strong> is ready.<br>The app will restart after installing.</p>
-<div class="btns">
-  <button class="yes" onclick="doUpdate()">Install &amp; Restart</button>
-  <button class="no" onclick="close_win()">Later</button>
-</div>
-</div>
-<script>
-const inv = window.__TAURI__.core.invoke;
-async function doUpdate() {{
-  document.querySelector('.yes').textContent = 'Installing…';
-  await inv('do_update');
-}}
-function close_win() {{ inv('close_updater_win'); }}
-</script>
-</body></html>`);
-    document.close();
-}});
-"#);
-
-        let _ = tauri::WebviewWindowBuilder::new(
-            &handle, "updater", tauri::WebviewUrl::App("".into()),
-        )
-        .title("Update Available")
-        .inner_size(400.0, 230.0)
-        .resizable(false)
-        .center()
-        .initialization_script(&script)
-        .build();
-
-        // Store the update so the IPC command can install it
-        *handle.state::<std::sync::Mutex<Option<Box<dyn std::any::Any + Send>>>>().inner().lock().unwrap()
-            = Some(Box::new(update));
-    });
-}
-
-// ── IPC Commands ──────────────────────────────────────────────────────────────
-
 #[tauri::command]
 fn focus_window(app: AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
@@ -140,25 +72,6 @@ fn connect(app: AppHandle, url: String) -> Result<(), String> {
 fn get_app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
 }
-
-#[tauri::command]
-fn close_updater_win(app: AppHandle) {
-    if let Some(w) = app.get_webview_window("updater") { let _ = w.close(); }
-}
-
-#[tauri::command]
-async fn do_update(app: AppHandle) -> Result<(), String> {
-    use tauri_plugin_updater::UpdaterExt;
-    let Ok(updater) = app.updater() else { return Err("updater not available".into()) };
-    let Ok(Some(update)) = updater.check().await else { return Err("no update found".into()) };
-    update.download_and_install(
-        |_chunk_len, _content_len| {},
-        || {},
-    ).await.map_err(|e| e.to_string())?;
-    app.restart();
-}
-
-// ── Bridge script ─────────────────────────────────────────────────────────────
 
 const BRIDGE: &str = r#"
 (function() {
@@ -193,11 +106,9 @@ fn open_main_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-// ── Tray ──────────────────────────────────────────────────────────────────────
-
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open ProjectFlow", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit",             true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
     TrayIconBuilder::new()
         .icon(app.default_window_icon().cloned().unwrap())
@@ -217,32 +128,18 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-// ── Entry ─────────────────────────────────────────────────────────────────────
-
-type UpdateSlot = std::sync::Mutex<Option<Box<dyn std::any::Any + Send>>>;
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
-        .manage(UpdateSlot::new(None))
         .invoke_handler(tauri::generate_handler![
             focus_window, navigate_to, connect, get_app_version,
-            do_update, close_updater_win,
         ])
         .setup(|app| {
             let _ = build_tray(app);
             open_main_window(app.handle().clone()).ok();
-            // Check for updates 5s after launch
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                check_for_updates(handle);
-            });
             Ok(())
         })
         .on_window_event(|_window, event| {

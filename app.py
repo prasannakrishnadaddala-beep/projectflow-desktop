@@ -88,11 +88,31 @@ def init_db():
                 id TEXT PRIMARY KEY, workspace_id TEXT, name TEXT,
                 initiator TEXT, participants TEXT DEFAULT '[]',
                 status TEXT DEFAULT 'active', created TEXT);
+            CREATE TABLE IF NOT EXISTS tickets (
+                id TEXT PRIMARY KEY, workspace_id TEXT, title TEXT, description TEXT,
+                type TEXT DEFAULT 'bug', priority TEXT DEFAULT 'medium',
+                status TEXT DEFAULT 'open', assignee TEXT, reporter TEXT,
+                project TEXT, tags TEXT DEFAULT '[]', created TEXT, updated TEXT);
+            CREATE TABLE IF NOT EXISTS ticket_comments (
+                id TEXT PRIMARY KEY, workspace_id TEXT, ticket_id TEXT,
+                user_id TEXT, content TEXT, created TEXT);
             CREATE TABLE IF NOT EXISTS call_signals (
                 id TEXT PRIMARY KEY, workspace_id TEXT, room_id TEXT,
                 from_user TEXT, to_user TEXT, type TEXT, data TEXT,
                 consumed INTEGER DEFAULT 0, created TEXT);
         """)
+        # Add tickets tables if not exists (migration)
+        try: db.executescript('''
+            CREATE TABLE IF NOT EXISTS tickets (
+                id TEXT PRIMARY KEY, workspace_id TEXT, title TEXT, description TEXT,
+                type TEXT DEFAULT 'bug', priority TEXT DEFAULT 'medium',
+                status TEXT DEFAULT 'open', assignee TEXT, reporter TEXT,
+                project TEXT, tags TEXT DEFAULT '[]', created TEXT, updated TEXT);
+            CREATE TABLE IF NOT EXISTS ticket_comments (
+                id TEXT PRIMARY KEY, workspace_id TEXT, ticket_id TEXT,
+                user_id TEXT, content TEXT, created TEXT);
+        ''')
+        except: pass
         # Add is_system column to messages if not exists (migration)
         try: db.execute("ALTER TABLE messages ADD COLUMN is_system INTEGER DEFAULT 0")
         except: pass
@@ -655,9 +675,14 @@ def dm_unread():
 @app.route("/api/reminders", methods=["GET"])
 @login_required
 def get_reminders():
+    include_fired=request.args.get("include_fired","0")=="1"
     with get_db() as db:
-        rows=db.execute("SELECT * FROM reminders WHERE workspace_id=? AND user_id=? AND fired=0 ORDER BY remind_at",
-                        (wid(),session["user_id"])).fetchall()
+        if include_fired:
+            rows=db.execute("SELECT * FROM reminders WHERE workspace_id=? AND user_id=? ORDER BY remind_at DESC",
+                            (wid(),session["user_id"])).fetchall()
+        else:
+            rows=db.execute("SELECT * FROM reminders WHERE workspace_id=? AND user_id=? AND fired=0 ORDER BY remind_at",
+                            (wid(),session["user_id"])).fetchall()
         return jsonify([dict(r) for r in rows])
 
 @app.route("/api/reminders", methods=["POST"])
@@ -672,12 +697,100 @@ def create_reminder():
                     d["remind_at"],d.get("minutes_before",10),0,ts()))
         return jsonify(dict(db.execute("SELECT * FROM reminders WHERE id=?",(rid,)).fetchone()))
 
+@app.route("/api/reminders/<rid>", methods=["PUT"])
+@login_required
+def update_reminder(rid):
+    d=request.json or {}
+    with get_db() as db:
+        existing=db.execute("SELECT * FROM reminders WHERE id=? AND user_id=?",(rid,session["user_id"])).fetchone()
+        if not existing: return jsonify({"error":"Not found"}),404
+        remind_at=d.get("remind_at",existing["remind_at"])
+        minutes_before=d.get("minutes_before",existing["minutes_before"])
+        task_title=d.get("task_title",existing["task_title"])
+        db.execute("UPDATE reminders SET remind_at=?,minutes_before=?,task_title=?,fired=0 WHERE id=? AND user_id=?",
+                   (remind_at,minutes_before,task_title,rid,session["user_id"]))
+        return jsonify(dict(db.execute("SELECT * FROM reminders WHERE id=?",(rid,)).fetchone()))
+
 @app.route("/api/reminders/<rid>", methods=["DELETE"])
 @login_required
 def delete_reminder(rid):
     with get_db() as db:
         db.execute("DELETE FROM reminders WHERE id=? AND user_id=?",(rid,session["user_id"]))
         return jsonify({"ok":True})
+
+# ── Tickets ───────────────────────────────────────────────────────────────────
+@app.route("/api/tickets", methods=["GET"])
+@login_required
+def get_tickets():
+    status=request.args.get("status","")
+    with get_db() as db:
+        if status:
+            rows=db.execute("SELECT * FROM tickets WHERE workspace_id=? AND status=? ORDER BY created DESC",(wid(),status)).fetchall()
+        else:
+            rows=db.execute("SELECT * FROM tickets WHERE workspace_id=? ORDER BY created DESC",(wid(),)).fetchall()
+        return jsonify([dict(r) for r in rows])
+
+@app.route("/api/tickets", methods=["POST"])
+@login_required
+def create_ticket():
+    d=request.json or {}
+    if not d.get("title"): return jsonify({"error":"title required"}),400
+    tid=f"tkt{int(datetime.now().timestamp()*1000)}"
+    now=ts()
+    with get_db() as db:
+        db.execute("INSERT INTO tickets VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (tid,wid(),d["title"],d.get("description",""),d.get("type","bug"),
+                    d.get("priority","medium"),d.get("status","open"),d.get("assignee",""),
+                    session["user_id"],d.get("project",""),json.dumps(d.get("tags",[])),now,now))
+        # Notify assignee
+        if d.get("assignee") and d["assignee"]!=session["user_id"]:
+            nid=f"n{int(datetime.now().timestamp()*1000)}"
+            reporter=db.execute("SELECT name FROM users WHERE id=?",(session["user_id"],)).fetchone()
+            rname=reporter["name"] if reporter else "Someone"
+            db.execute("INSERT INTO notifications VALUES (?,?,?,?,?,?,?)",
+                       (nid,wid(),"task_assigned",f"🎫 {rname} assigned ticket: {d['title']}",d["assignee"],0,now))
+        return jsonify(dict(db.execute("SELECT * FROM tickets WHERE id=?",(tid,)).fetchone()))
+
+@app.route("/api/tickets/<tid>", methods=["PUT"])
+@login_required
+def update_ticket(tid):
+    d=request.json or {}
+    with get_db() as db:
+        t=db.execute("SELECT * FROM tickets WHERE id=? AND workspace_id=?",(tid,wid())).fetchone()
+        if not t: return jsonify({"error":"not found"}),404
+        now=ts()
+        db.execute("UPDATE tickets SET title=?,description=?,type=?,priority=?,status=?,assignee=?,project=?,tags=?,updated=? WHERE id=?",
+                   (d.get("title",t["title"]),d.get("description",t["description"]),
+                    d.get("type",t["type"]),d.get("priority",t["priority"]),
+                    d.get("status",t["status"]),d.get("assignee",t["assignee"]),
+                    d.get("project",t["project"]),json.dumps(d.get("tags",json.loads(t["tags"] or "[]"))),now,tid))
+        return jsonify(dict(db.execute("SELECT * FROM tickets WHERE id=?",(tid,)).fetchone()))
+
+@app.route("/api/tickets/<tid>", methods=["DELETE"])
+@login_required
+def delete_ticket(tid):
+    with get_db() as db:
+        db.execute("DELETE FROM tickets WHERE id=? AND workspace_id=?",(tid,wid()))
+        db.execute("DELETE FROM ticket_comments WHERE ticket_id=? AND workspace_id=?",(tid,wid()))
+        return jsonify({"ok":True})
+
+@app.route("/api/tickets/<tid>/comments", methods=["GET"])
+@login_required
+def get_ticket_comments(tid):
+    with get_db() as db:
+        rows=db.execute("SELECT * FROM ticket_comments WHERE ticket_id=? AND workspace_id=? ORDER BY created",(tid,wid())).fetchall()
+        return jsonify([dict(r) for r in rows])
+
+@app.route("/api/tickets/<tid>/comments", methods=["POST"])
+@login_required
+def add_ticket_comment(tid):
+    d=request.json or {}
+    if not d.get("content"): return jsonify({"error":"content required"}),400
+    cid=f"tc{int(datetime.now().timestamp()*1000)}"
+    with get_db() as db:
+        db.execute("INSERT INTO ticket_comments VALUES (?,?,?,?,?,?)",
+                   (cid,wid(),tid,session["user_id"],d["content"],ts()))
+        return jsonify(dict(db.execute("SELECT * FROM ticket_comments WHERE id=?",(cid,)).fetchone()))
 
 # ── Calls (Huddle) ────────────────────────────────────────────────────────────
 @app.route("/api/calls", methods=["GET"])
@@ -1218,6 +1331,7 @@ textarea.inp{resize:vertical;min-height:66px;line-height:1.5}
 .toast-time{font-size:9px;color:var(--tx3);margin-top:3px;font-family:monospace}
 .toast-close{width:20px;height:20px;border-radius:6px;border:none;background:transparent;color:var(--tx3);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;transition:all .12s;padding:0}
 .toast-close:hover{background:var(--sf2);color:var(--tx)}
+@keyframes floatUp{0%{opacity:1;transform:translateY(0) scale(1)}70%{opacity:.8;transform:translateY(-60px) scale(1.2)}100%{opacity:0;transform:translateY(-110px) scale(.8)}}
 @keyframes toastIn{from{opacity:0;transform:translateX(100%)}to{opacity:1;transform:translateX(0)}}
 @keyframes toastOut{from{opacity:1;transform:translateX(0)}to{opacity:0;transform:translateX(110%)}}
 .toast{animation:toastIn .25s cubic-bezier(.34,1.56,.64,1) forwards}
@@ -1276,7 +1390,8 @@ const STAGES={
 };
 const KCOLS=['backlog','planning','development','code_review','testing','uat','release','production','completed','blocked'];
 const PRIS={critical:{label:'Critical',color:'var(--rd)',sym:'🔴'},high:{label:'High',color:'var(--rd2)',sym:'↑'},medium:{label:'Medium',color:'var(--pu)',sym:'→'},low:{label:'Low',color:'var(--cy)',sym:'↓'}};
-const ROLES=['Admin','Developer','Tester','Viewer'];
+const ROLES=['Admin','TeamLead','Developer','Tester','Viewer'];
+const JOIN_ROLES=['Developer','Tester','Viewer']; // roles available when joining via invite code
 const PAL=['#7c3aed','#2563eb','#059669','#d97706','#dc2626','#ec4899','#0891b2','#aaff00'];
 const fmtD=d=>{if(!d)return'—';try{return new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});}catch(e){return d;}};
 const ago=iso=>{const m=Math.floor((Date.now()-new Date(iso))/60000);if(m<1)return'just now';if(m<60)return m+'m ago';if(m<1440)return Math.floor(m/60)+'h ago';return Math.floor(m/1440)+'d ago';};
@@ -1400,7 +1515,7 @@ function AuthScreen({onLogin}){
             </div>
             ${tab==='register'?html`<div><label class="lbl">Role</label>
               <select class="sel" value=${role} onChange=${e=>setRole(e.target.value)}>
-                ${ROLES.map(r=>html`<option key=${r}>${r}</option>`)}
+                ${(regMode==='join'?JOIN_ROLES:ROLES).map(r=>html`<option key=${r}>${r}</option>`)}
               </select></div>`:null}
             ${err?html`<div style=${{color:'var(--rd)',fontSize:12,padding:'8px 12px',background:'rgba(248,113,113,.07)',borderRadius:8,border:'1px solid rgba(248,113,113,.2)'}}>${err}</div>`:null}
             <button class="btn bp" style=${{justifyContent:'center',height:42}} onClick=${go} disabled=${busy}>
@@ -1471,6 +1586,7 @@ function Sidebar({cu,view,setView,onLogout,unread,dmUnread,col,setCol,wsName,cal
     notifs:html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`,
     reminders:html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
     team:html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="17" cy="8" r="3"/><circle cx="7" cy="8" r="3"/><path d="M3 21v-2a5 5 0 0 1 8.66-3.43"/><path d="M13 21v-2a5 5 0 0 1 10 0v2"/></svg>`,
+    tickets:html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1.5a1.5 1.5 0 0 0 0 3V15a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1.5a1.5 1.5 0 0 0 0-3V9z"/><line x1="9" y1="7" x2="9" y2="17" strokeDasharray="2 2"/></svg>`,
     settings:html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M19.07 19.07l-1.41-1.41M4.93 19.07l1.41-1.41M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>`,
   };
   const items=[
@@ -1480,7 +1596,8 @@ function Sidebar({cu,view,setView,onLogout,unread,dmUnread,col,setCol,wsName,cal
     {id:'messages', icon:ICONS.messages, label:'Channels'},
     {id:'dm',       icon:ICONS.dm,       label:'Direct Messages',badge:totalDm},
     {id:'reminders',icon:ICONS.reminders,label:'Reminders'},
-    ...(cu&&cu.role==='Admin'?[{id:'team',icon:ICONS.team,label:'Team'}]:[]),
+    {id:'tickets',icon:ICONS.tickets,label:'Tickets'},
+    ...(cu&&cu.role==='Admin'||cu&&cu.role==='TeamLead'?[{id:'team',icon:ICONS.team,label:'Team'}]:[]),
   ];
   const themeIcon=dark
     ?html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`
@@ -1514,12 +1631,6 @@ function Sidebar({cu,view,setView,onLogout,unread,dmUnread,col,setCol,wsName,cal
           onMouseEnter=${e=>{if(view!=='settings'){e.currentTarget.style.background='rgba(255,255,255,.07)';e.currentTarget.style.color='rgba(255,255,255,.75)';}}}
           onMouseLeave=${e=>{if(view!=='settings'){e.currentTarget.style.background='transparent';e.currentTarget.style.color='rgba(255,255,255,.32)';}}}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
-        </button>
-        <button title="Sign Out" onClick=${()=>onLogout&&onLogout()}
-          style=${{width:40,height:40,borderRadius:12,border:'none',cursor:'pointer',background:'transparent',color:'rgba(239,68,68,.5)',display:'flex',alignItems:'center',justifyContent:'center',transition:'all .14s'}}
-          onMouseEnter=${e=>{e.currentTarget.style.background='rgba(239,68,68,.12)';e.currentTarget.style.color='#ef4444';}}
-          onMouseLeave=${e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.color='rgba(239,68,68,.5)';}}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         </button>
       </div>
     </aside>`;
@@ -2799,6 +2910,306 @@ function TeamView({users,cu,reload}){
   </div>`;
 }
 
+
+/* ─── TicketsView ────────────────────────────────────────────────────────── */
+function TicketsView({cu,users,projects,onReload}){
+  const [tickets,setTickets]=useState([]);
+  const [busy,setBusy]=useState(true);
+  const [filterStatus,setFilterStatus]=useState('');
+  const [filterPriority,setFilterPriority]=useState('');
+  const [filterType,setFilterType]=useState('');
+  const [showNew,setShowNew]=useState(false);
+  const [editTicket,setEditTicket]=useState(null);
+  const [detailTicket,setDetailTicket]=useState(null);
+  const [comments,setComments]=useState([]);
+  const [newComment,setNewComment]=useState('');
+  const [savingComment,setSavingComment]=useState(false);
+
+  // New ticket form state
+  const [nTitle,setNTitle]=useState('');
+  const [nDesc,setNDesc]=useState('');
+  const [nType,setNType]=useState('bug');
+  const [nPriority,setNPriority]=useState('medium');
+  const [nAssignee,setNAssignee]=useState('');
+  const [nProject,setNProject]=useState('');
+  const [nStatus,setNStatus]=useState('open');
+  const [saving,setSaving]=useState(false);
+
+  const load=useCallback(async()=>{
+    setBusy(true);
+    const d=await api.get('/api/tickets'+(filterStatus?'?status='+filterStatus:''));
+    setTickets(Array.isArray(d)?d:[]);
+    setBusy(false);
+  },[filterStatus]);
+  useEffect(()=>{load();},[load]);
+
+  const saveTicket=async()=>{
+    if(!nTitle.trim())return;
+    setSaving(true);
+    const payload={title:nTitle,description:nDesc,type:nType,priority:nPriority,assignee:nAssignee,project:nProject,status:nStatus};
+    if(editTicket){await api.put('/api/tickets/'+editTicket.id,payload);}
+    else{await api.post('/api/tickets',payload);}
+    setSaving(false);setShowNew(false);setEditTicket(null);
+    setNTitle('');setNDesc('');setNType('bug');setNPriority('medium');setNAssignee('');setNProject('');setNStatus('open');
+    load();
+  };
+
+  const openEdit=(t)=>{
+    setEditTicket(t);setNTitle(t.title);setNDesc(t.description||'');setNType(t.type||'bug');
+    setNPriority(t.priority||'medium');setNAssignee(t.assignee||'');setNProject(t.project||'');setNStatus(t.status||'open');
+    setShowNew(true);
+  };
+
+  const openDetail=async(t)=>{
+    setDetailTicket(t);
+    const c=await api.get('/api/tickets/'+t.id+'/comments');
+    setComments(Array.isArray(c)?c:[]);
+  };
+
+  const postComment=async()=>{
+    if(!newComment.trim()||!detailTicket)return;
+    setSavingComment(true);
+    await api.post('/api/tickets/'+detailTicket.id+'/comments',{content:newComment});
+    setNewComment('');
+    const c=await api.get('/api/tickets/'+detailTicket.id+'/comments');
+    setComments(Array.isArray(c)?c:[]);
+    setSavingComment(false);
+  };
+
+  const quickStatus=async(t,status)=>{
+    await api.put('/api/tickets/'+t.id,{status});
+    load();
+    if(detailTicket&&detailTicket.id===t.id)setDetailTicket(prev=>({...prev,status}));
+  };
+
+  const del=async(id)=>{
+    if(!window.confirm('Delete this ticket?'))return;
+    await api.del('/api/tickets/'+id);
+    setDetailTicket(null);load();
+  };
+
+  const TYPE_CFG={
+    bug:{icon:'🐛',color:'var(--rd)',bg:'rgba(248,113,113,.12)',label:'Bug'},
+    feature:{icon:'✨',color:'var(--ac)',bg:'rgba(170,255,0,.12)',label:'Feature'},
+    improvement:{icon:'🔧',color:'var(--cy)',bg:'rgba(34,211,238,.12)',label:'Improvement'},
+    task:{icon:'✅',color:'var(--gn)',bg:'rgba(74,222,128,.12)',label:'Task'},
+    question:{icon:'❓',color:'var(--pu)',bg:'rgba(167,139,250,.12)',label:'Question'},
+  };
+  const PRIORITY_CFG={
+    critical:{icon:'🔴',color:'#ef4444',label:'Critical'},
+    high:{icon:'🟠',color:'#f97316',label:'High'},
+    medium:{icon:'🟡',color:'#eab308',label:'Medium'},
+    low:{icon:'🟢',color:'#22c55e',label:'Low'},
+  };
+  const STATUS_CFG={
+    open:{icon:'🔵',color:'var(--cy)',label:'Open'},
+    'in-progress':{icon:'🟡',color:'var(--am)',label:'In Progress'},
+    review:{icon:'🟣',color:'var(--pu)',label:'In Review'},
+    resolved:{icon:'🟢',color:'var(--gn)',label:'Resolved'},
+    closed:{icon:'⚫',color:'var(--tx3)',label:'Closed'},
+  };
+
+  const visible=tickets.filter(t=>{
+    if(filterPriority&&t.priority!==filterPriority)return false;
+    if(filterType&&t.type!==filterType)return false;
+    return true;
+  });
+
+  const statCounts=Object.keys(STATUS_CFG).reduce((a,s)=>{a[s]=tickets.filter(t=>t.status===s).length;return a;},{});
+
+  const umap=safe(users).reduce((a,u)=>{a[u.id]=u;return a;},{});
+
+  const FORM=html`
+    <div class="ov" onClick=${e=>e.target===e.currentTarget&&(setShowNew(false),setEditTicket(null))}>
+      <div class="mo fi" style=${{maxWidth:560}}>
+        <div style=${{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
+          <h2 style=${{fontSize:16,fontWeight:700,color:'var(--tx)'}}>${editTicket?'✏️ Edit Ticket':'🎫 New Ticket'}</h2>
+          <button class="btn bg" style=${{padding:'7px 10px'}} onClick=${()=>{setShowNew(false);setEditTicket(null);}}>✕</button>
+        </div>
+        <div style=${{display:'flex',flexDirection:'column',gap:13}}>
+          <div>
+            <label class="lbl">Title *</label>
+            <input class="inp" value=${nTitle} onInput=${e=>setNTitle(e.target.value)} placeholder="Brief description of the issue"/>
+          </div>
+          <div>
+            <label class="lbl">Description</label>
+            <textarea class="inp" rows="3" style=${{resize:'vertical'}} value=${nDesc} onInput=${e=>setNDesc(e.target.value)} placeholder="Steps to reproduce, expected vs actual behaviour..."></textarea>
+          </div>
+          <div style=${{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10}}>
+            <div>
+              <label class="lbl">Type</label>
+              <select class="inp" value=${nType} onChange=${e=>setNType(e.target.value)}>
+                ${Object.entries(TYPE_CFG).map(([v,c])=>html`<option key=${v} value=${v}>${c.icon} ${c.label}</option>`)}
+              </select>
+            </div>
+            <div>
+              <label class="lbl">Priority</label>
+              <select class="inp" value=${nPriority} onChange=${e=>setNPriority(e.target.value)}>
+                ${Object.entries(PRIORITY_CFG).map(([v,c])=>html`<option key=${v} value=${v}>${c.icon} ${c.label}</option>`)}
+              </select>
+            </div>
+            <div>
+              <label class="lbl">Status</label>
+              <select class="inp" value=${nStatus} onChange=${e=>setNStatus(e.target.value)}>
+                ${Object.entries(STATUS_CFG).map(([v,c])=>html`<option key=${v} value=${v}>${c.icon} ${c.label}</option>`)}
+              </select>
+            </div>
+          </div>
+          <div style=${{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+            <div>
+              <label class="lbl">Assignee</label>
+              <select class="inp" value=${nAssignee} onChange=${e=>setNAssignee(e.target.value)}>
+                <option value="">— Unassigned —</option>
+                ${safe(users).map(u=>html`<option key=${u.id} value=${u.id}>${u.name}</option>`)}
+              </select>
+            </div>
+            <div>
+              <label class="lbl">Project</label>
+              <select class="inp" value=${nProject} onChange=${e=>setNProject(e.target.value)}>
+                <option value="">— No project —</option>
+                ${safe(projects).map(p=>html`<option key=${p.id} value=${p.id}>${p.name}</option>`)}
+              </select>
+            </div>
+          </div>
+          <div style=${{display:'flex',gap:9,justifyContent:'flex-end',paddingTop:4}}>
+            <button class="btn bg" onClick=${()=>{setShowNew(false);setEditTicket(null);}}>Cancel</button>
+            <button class="btn bp" onClick=${saveTicket} disabled=${saving||!nTitle.trim()}>
+              ${saving?'Saving...':editTicket?'Save Changes':'Create Ticket'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  const DETAIL=detailTicket?html`
+    <div class="ov" onClick=${e=>e.target===e.currentTarget&&setDetailTicket(null)}>
+      <div class="mo fi" style=${{maxWidth:620,maxHeight:'85vh',display:'flex',flexDirection:'column'}}>
+        <div style=${{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16,flexShrink:0}}>
+          <div style=${{flex:1,minWidth:0,marginRight:12}}>
+            <div style=${{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+              <span style=${{fontSize:18}}>${(TYPE_CFG[detailTicket.type]||TYPE_CFG.bug).icon}</span>
+              <span style=${{fontSize:11,padding:'2px 8px',borderRadius:6,background:(PRIORITY_CFG[detailTicket.priority]||PRIORITY_CFG.medium).color+'22',color:(PRIORITY_CFG[detailTicket.priority]||PRIORITY_CFG.medium).color,fontWeight:700}}>${(PRIORITY_CFG[detailTicket.priority]||PRIORITY_CFG.medium).label}</span>
+              <select value=${detailTicket.status} onChange=${e=>quickStatus(detailTicket,e.target.value)}
+                style=${{fontSize:11,padding:'2px 8px',borderRadius:6,background:'var(--sf2)',border:'1px solid var(--bd)',color:'var(--tx)',cursor:'pointer'}}>
+                ${Object.entries(STATUS_CFG).map(([v,c])=>html`<option key=${v} value=${v}>${c.icon} ${c.label}</option>`)}
+              </select>
+            </div>
+            <h2 style=${{fontSize:16,fontWeight:700,color:'var(--tx)',marginBottom:4}}>${detailTicket.title}</h2>
+            <div style=${{fontSize:11,color:'var(--tx3)'}}>
+              Reported by ${(umap[detailTicket.reporter]||{name:'Unknown'}).name} · ${new Date(detailTicket.created).toLocaleDateString()}
+              ${detailTicket.assignee?html` · Assigned to <b style=${{color:'var(--tx2)'}}>${(umap[detailTicket.assignee]||{name:'?'}).name}</b>`:null}
+            </div>
+          </div>
+          <div style=${{display:'flex',gap:6,flexShrink:0}}>
+            <button class="btn bg" style=${{fontSize:11,padding:'5px 9px'}} onClick=${()=>openEdit(detailTicket)}>✏️ Edit</button>
+            <button class="btn brd" style=${{fontSize:11,padding:'5px 9px',color:'var(--rd)'}} onClick=${()=>del(detailTicket.id)}>🗑</button>
+            <button class="btn bg" style=${{padding:'7px 10px'}} onClick=${()=>setDetailTicket(null)}>✕</button>
+          </div>
+        </div>
+        ${detailTicket.description?html`
+          <div style=${{background:'var(--sf2)',borderRadius:9,padding:'12px 14px',marginBottom:14,fontSize:13,color:'var(--tx2)',lineHeight:1.6,flexShrink:0,border:'1px solid var(--bd)'}}>
+            ${detailTicket.description}
+          </div>`:null}
+        <div style=${{flex:1,overflowY:'auto',paddingBottom:8}}>
+          <div style=${{fontWeight:700,fontSize:12,color:'var(--tx2)',marginBottom:10}}>💬 Comments (${comments.length})</div>
+          ${comments.length===0?html`<p style=${{color:'var(--tx3)',fontSize:12,textAlign:'center',padding:'16px 0'}}>No comments yet. Be the first!</p>`:null}
+          <div style=${{display:'flex',flexDirection:'column',gap:8}}>
+            ${comments.map(c=>html`
+              <div key=${c.id} style=${{display:'flex',gap:10,padding:'10px 12px',background:'var(--sf2)',borderRadius:10,border:'1px solid var(--bd)'}}>
+                <${Av} u=${umap[c.user_id]||{name:'?',color:'#888'}} size=${30}/>
+                <div style=${{flex:1}}>
+                  <div style=${{display:'flex',gap:8,alignItems:'center',marginBottom:4}}>
+                    <span style=${{fontSize:12,fontWeight:700,color:'var(--tx)'}}>${(umap[c.user_id]||{name:'?'}).name}</span>
+                    <span style=${{fontSize:10,color:'var(--tx3)'}}>${new Date(c.created).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>
+                  </div>
+                  <div style=${{fontSize:12,color:'var(--tx2)',lineHeight:1.5}}>${c.content}</div>
+                </div>
+              </div>`)}
+          </div>
+        </div>
+        <div style=${{display:'flex',gap:9,paddingTop:12,borderTop:'1px solid var(--bd)',flexShrink:0}}>
+          <input class="inp" style=${{flex:1}} value=${newComment} onInput=${e=>setNewComment(e.target.value)}
+            onKeyDown=${e=>e.key==='Enter'&&!e.shiftKey&&postComment()}
+            placeholder="Add a comment… (Enter to submit)"/>
+          <button class="btn bp" onClick=${postComment} disabled=${savingComment||!newComment.trim()}>
+            ${savingComment?html`<span class="spin"></span>`:'Send'}
+          </button>
+        </div>
+      </div>
+    </div>`:null;
+
+  return html`
+    <div class="fi" style=${{height:'100%',overflowY:'auto',padding:'18px 22px',background:'var(--bg)'}}>
+      <!-- Header -->
+      <div style=${{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+        <div style=${{display:'flex',gap:8,flexWrap:'wrap'}}>
+          ${Object.entries(STATUS_CFG).map(([s,c])=>html`
+            <button key=${s} class=${'chip'+(filterStatus===s?' on':'')} onClick=${()=>setFilterStatus(filterStatus===s?'':s)}
+              style=${{fontSize:11,display:'flex',alignItems:'center',gap:4}}>
+              ${c.icon} ${c.label} <span style=${{fontWeight:700,color:c.color}}>${statCounts[s]||0}</span>
+            </button>`)}
+        </div>
+        <button class="btn bp" style=${{fontSize:12}} onClick=${()=>{setEditTicket(null);setNTitle('');setNDesc('');setNType('bug');setNPriority('medium');setNAssignee('');setNProject('');setNStatus('open');setShowNew(true);}}>
+          + New Ticket
+        </button>
+      </div>
+
+      <!-- Filter bar -->
+      <div style=${{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap'}}>
+        <select class="sel" style=${{fontSize:11,padding:'5px 10px',height:30}} value=${filterPriority} onChange=${e=>setFilterPriority(e.target.value)}>
+          <option value="">All Priorities</option>
+          ${Object.entries(PRIORITY_CFG).map(([v,c])=>html`<option key=${v} value=${v}>${c.icon} ${c.label}</option>`)}
+        </select>
+        <select class="sel" style=${{fontSize:11,padding:'5px 10px',height:30}} value=${filterType} onChange=${e=>setFilterType(e.target.value)}>
+          <option value="">All Types</option>
+          ${Object.entries(TYPE_CFG).map(([v,c])=>html`<option key=${v} value=${v}>${c.icon} ${c.label}</option>`)}
+        </select>
+        <span style=${{fontSize:11,color:'var(--tx3)',alignSelf:'center',marginLeft:4}}>${visible.length} ticket${visible.length!==1?'s':''}</span>
+      </div>
+
+      <!-- Ticket list -->
+      ${busy?html`<div style=${{textAlign:'center',padding:40}}><div class="spin" style=${{margin:'0 auto'}}></div></div>`:null}
+      ${!busy&&visible.length===0?html`
+        <div style=${{textAlign:'center',padding:'48px 16px',color:'var(--tx3)',fontSize:13,background:'var(--sf)',borderRadius:12,border:'1px solid var(--bd)'}}>
+          <div style=${{fontSize:36,marginBottom:12}}>🎫</div>
+          <div style=${{fontWeight:600,marginBottom:6}}>No tickets yet</div>
+          <div>Create a ticket to track bugs, features, and tasks</div>
+        </div>`:null}
+      <div style=${{display:'flex',flexDirection:'column',gap:8}}>
+        ${visible.map(t=>{
+          const tc=TYPE_CFG[t.type]||TYPE_CFG.bug;
+          const pc=PRIORITY_CFG[t.priority]||PRIORITY_CFG.medium;
+          const sc=STATUS_CFG[t.status]||STATUS_CFG.open;
+          const assignee=t.assignee?umap[t.assignee]:null;
+          return html`
+          <div key=${t.id} onClick=${()=>openDetail(t)}
+            style=${{display:'flex',gap:12,padding:'12px 15px',background:'var(--sf)',borderRadius:11,border:'1px solid var(--bd)',alignItems:'center',cursor:'pointer',transition:'all .14s'}}
+            onMouseEnter=${e=>{e.currentTarget.style.borderColor='var(--ac)';e.currentTarget.style.background='var(--sf2)';}}
+            onMouseLeave=${e=>{e.currentTarget.style.borderColor='var(--bd)';e.currentTarget.style.background='var(--sf)';}}>
+            <!-- Type icon -->
+            <div style=${{width:36,height:36,borderRadius:9,background:tc.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:17,flexShrink:0}}>${tc.icon}</div>
+            <!-- Info -->
+            <div style=${{flex:1,minWidth:0}}>
+              <div style=${{display:'flex',alignItems:'center',gap:7,marginBottom:3}}>
+                <span style=${{fontSize:13,fontWeight:700,color:'var(--tx)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>${t.title}</span>
+                <span style=${{fontSize:10,padding:'1px 7px',borderRadius:5,background:sc.color+'22',color:sc.color,fontWeight:700,flexShrink:0}}>${sc.icon} ${sc.label}</span>
+              </div>
+              <div style=${{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                <span style=${{fontSize:10,padding:'1px 6px',borderRadius:4,background:pc.color+'22',color:pc.color,fontWeight:600}}>${pc.icon} ${pc.label}</span>
+                <span style=${{fontSize:10,color:'var(--tx3)'}}>${tc.label}</span>
+                ${t.project?html`<span style=${{fontSize:10,color:'var(--tx3)'}}>📁 ${(safe(projects).find(p=>p.id===t.project)||{name:t.project}).name}</span>`:null}
+                <span style=${{fontSize:10,color:'var(--tx3)',marginLeft:'auto'}}>${new Date(t.created).toLocaleDateString()}</span>
+              </div>
+            </div>
+            <!-- Assignee avatar -->
+            ${assignee?html`<div style=${{flexShrink:0}}><${Av} u=${assignee} size=${28}/></div>`:null}
+          </div>`;})}
+      </div>
+      ${showNew?FORM:null}
+      ${DETAIL}
+    </div>`;
+}
+
 /* ─── WorkspaceSettings ───────────────────────────────────────────────────── */
 function WorkspaceSettings({cu,onReload}){
   const [ws,setWs]=useState(null);const [wsName,setWsName]=useState('');const [aiKey,setAiKey]=useState('');const [showKey,setShowKey]=useState(false);const [saving,setSaving]=useState(false);const [saved,setSaved]=useState(false);
@@ -2862,6 +3273,48 @@ function WorkspaceSettings({cu,onReload}){
         </div>
         <div style=${{marginTop:10,padding:'9px 12px',background:'rgba(99,102,241,.07)',borderRadius:8,border:'1px solid rgba(170,255,0,.15)',fontSize:12,color:'var(--tx2)'}}>
           💡 Get your API key at <b style=${{color:'var(--ac2)'}}>console.anthropic.com</b>. The AI can answer questions, create tasks, update statuses, and generate EOD reports.
+        </div>
+      </div>
+
+      <div class="card" style=${{marginBottom:16}}>
+        <h3 style=${{fontSize:13,fontWeight:700,color:'var(--tx)',marginBottom:4}}>🔐 Role Permissions</h3>
+        <p style=${{fontSize:12,color:'var(--tx2)',marginBottom:14}}>Control what each role can do in the workspace.</p>
+        <div style=${{overflowX:'auto'}}>
+          <table style=${{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+            <thead>
+              <tr>
+                <th style=${{padding:'8px 12px',textAlign:'left',color:'var(--tx3)',fontWeight:600,borderBottom:'1px solid var(--bd)'}}>Permission</th>
+                ${['Admin','TeamLead','Developer','Tester','Viewer'].map(r=>html`
+                  <th key=${r} style=${{padding:'8px 12px',textAlign:'center',color:'var(--tx3)',fontWeight:600,borderBottom:'1px solid var(--bd)',minWidth:80}}>${r}</th>`)}
+              </tr>
+            </thead>
+            <tbody>
+              ${[
+                {label:'Create & Edit Projects',perms:{Admin:true,TeamLead:true,Developer:false,Tester:false,Viewer:false}},
+                {label:'Create & Assign Tasks',perms:{Admin:true,TeamLead:true,Developer:true,Tester:false,Viewer:false}},
+                {label:'Edit Own Tasks',perms:{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:false}},
+                {label:'Create Tickets',perms:{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:false}},
+                {label:'Close / Resolve Tickets',perms:{Admin:true,TeamLead:true,Developer:true,Tester:false,Viewer:false}},
+                {label:'Send Channel Messages',perms:{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:true}},
+                {label:'Manage Team Members',perms:{Admin:true,TeamLead:true,Developer:false,Tester:false,Viewer:false}},
+                {label:'Manage Workspace Settings',perms:{Admin:true,TeamLead:false,Developer:false,Tester:false,Viewer:false}},
+                {label:'View All Projects',perms:{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:true}},
+                {label:'Start Huddle Calls',perms:{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:true}},
+              ].map((row,i)=>html`
+                <tr key=${row.label} style=${{background:i%2===0?'transparent':'var(--sf2)'}}>
+                  <td style=${{padding:'9px 12px',color:'var(--tx2)',fontWeight:500}}>${row.label}</td>
+                  ${['Admin','TeamLead','Developer','Tester','Viewer'].map(r=>html`
+                    <td key=${r} style=${{padding:'9px 12px',textAlign:'center'}}>
+                      ${row.perms[r]
+                        ?html`<span style=${{color:'var(--gn)',fontSize:16}}>✓</span>`
+                        :html`<span style=${{color:'var(--tx3)',fontSize:14,opacity:.4}}>—</span>`}
+                    </td>`)}
+                </tr>`)}
+            </tbody>
+          </table>
+        </div>
+        <div style=${{marginTop:12,padding:'9px 13px',background:'rgba(170,255,0,.05)',borderRadius:9,border:'1px solid rgba(170,255,0,.15)',fontSize:12,color:'var(--tx3)'}}>
+          💡 Permissions are role-based. Assign roles to team members in the <b style=${{color:'var(--tx2)'}}>Team</b> tab.
         </div>
       </div>
 
@@ -3145,7 +3598,7 @@ function ReminderModal({task,onClose,onSaved}){
 }
 
 /* ─── RemindersView ──────────────────────────────────────────────────────── */
-function RemindersView({cu,tasks,projects,onSetReminder,onReload}){
+function RemindersView({cu,tasks,projects,onSetReminder,onReload,initialView}){
   const [reminders,setReminders]=useState([]);
   const [busy,setBusy]=useState(true);
   const [showAdd,setShowAdd]=useState(false);
@@ -3155,12 +3608,17 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload}){
   const [addMins,setAddMins]=useState(10);
   const [saving,setSaving]=useState(false);
   const [addProjId,setAddProjId]=useState('');
+  const [showCompleted,setShowCompleted]=useState(false);
+  const [editReminder,setEditReminder]=useState(null);
+  const [editDate,setEditDate]=useState('');
+  const [editTime,setEditTime]=useState('');
+  const [editMins,setEditMins]=useState(10);
   const now=new Date();
   const filteredTasks=addProjId?safe(tasks).filter(t=>t.project===addProjId):safe(tasks);
 
   const load=useCallback(async()=>{
     setBusy(true);
-    const d=await api.get('/api/reminders');
+    const d=await api.get('/api/reminders?include_fired=1');
     setReminders(Array.isArray(d)?d:[]);
     setBusy(false);
   },[]);
@@ -3168,6 +3626,23 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload}){
   useEffect(()=>{load();},[load]);
 
   const del=async id=>{await api.del('/api/reminders/'+id);load();onReload&&onReload();};
+
+  const openEdit=(r)=>{
+    setEditReminder(r);
+    const d=new Date(r.remind_at);
+    const pad=n=>String(n).padStart(2,'0');
+    setEditDate(d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()));
+    setEditTime(pad(d.getHours())+':'+pad(d.getMinutes()));
+    setEditMins(r.minutes_before||10);
+  };
+
+  const saveEdit=async()=>{
+    if(!editDate||!editTime)return;
+    setSaving(true);
+    const dt=new Date(editDate+'T'+editTime);
+    await api.put('/api/reminders/'+editReminder.id,{remind_at:dt.toISOString(),minutes_before:editMins,task_title:editReminder.task_title});
+    setSaving(false);setEditReminder(null);load();onReload&&onReload();
+  };
 
   const saveReminder=async()=>{
     if(!addTaskId||!addDate||!addTime){return;}
@@ -3181,8 +3656,10 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload}){
     load();
   };
 
-  const upcoming=reminders.filter(r=>new Date(r.remind_at)>=now).sort((a,b)=>new Date(a.remind_at)-new Date(b.remind_at));
-  const overdue=reminders.filter(r=>new Date(r.remind_at)<now).sort((a,b)=>new Date(b.remind_at)-new Date(a.remind_at));
+  const active=reminders.filter(r=>!r.fired);
+  const completed=reminders.filter(r=>r.fired);
+  const upcoming=active.filter(r=>new Date(r.remind_at)>=now).sort((a,b)=>new Date(a.remind_at)-new Date(b.remind_at));
+  const overdue=active.filter(r=>new Date(r.remind_at)<now).sort((a,b)=>new Date(b.remind_at)-new Date(a.remind_at));
 
   const fmtRem=dt=>{
     const d=new Date(dt);
@@ -3195,10 +3672,10 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload}){
   };
 
   const statCards=[
-    {label:'Total',val:reminders.length,color:'var(--ac)',bg:'rgba(170,255,0,.1)',icon:'⏰'},
     {label:'Upcoming',val:upcoming.length,color:'var(--cy)',bg:'rgba(34,211,238,.1)',icon:'⚡'},
     {label:'Overdue',val:overdue.length,color:'var(--rd)',bg:'rgba(248,113,113,.1)',icon:'🚨'},
-    {label:'Today',val:reminders.filter(r=>{const d=new Date(r.remind_at);return d.toDateString()===now.toDateString();}).length,color:'var(--gn)',bg:'rgba(74,222,128,.1)',icon:'📅'},
+    {label:'Completed',val:completed.length,color:'var(--gn)',bg:'rgba(74,222,128,.1)',icon:'✅'},
+    {label:'Today',val:active.filter(r=>{const d=new Date(r.remind_at);return d.toDateString()===now.toDateString();}).length,color:'var(--ac)',bg:'rgba(170,255,0,.1)',icon:'📅'},
   ];
 
   return html`
@@ -3206,7 +3683,12 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload}){
 
       <div style=${{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
         <div style=${{fontSize:13,color:'var(--tx3)'}}>Set reminders for your tasks — get notified with sound before they're due.</div>
-        <button class="btn bp" style=${{fontSize:12}} onClick=${()=>setShowAdd(true)}>+ Add Reminder</button>
+        <div style=${{display:'flex',gap:8}}>
+          <button class=${'btn '+(showCompleted?'bp':'bg')} style=${{fontSize:12}} onClick=${()=>setShowCompleted(p=>!p)}>
+            ${showCompleted?'Hide Completed':'Show Completed ('+completed.length+')'}
+          </button>
+          <button class="btn bp" style=${{fontSize:12}} onClick=${()=>setShowAdd(true)}>+ Add Reminder</button>
+        </div>
       </div>
 
       <div style=${{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:18}}>
@@ -3299,8 +3781,10 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload}){
                     <div style=${{display:'flex',gap:6,alignItems:'center'}}>
                       <span style=${{fontSize:10,padding:'1px 6px',borderRadius:4,background:ft.bg,color:ft.cls,fontWeight:700}}>${ft.label}</span>
                       <span style=${{fontSize:10,color:'var(--tx3)',fontFamily:'monospace'}}>${new Date(r.remind_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>
+                      ${r.minutes_before>0?html`<span style=${{fontSize:10,color:'var(--am)'}}>🔔 ${r.minutes_before}min before</span>`:null}
                     </div>
                   </div>
+                  <button class="btn bg" title="Edit" style=${{fontSize:11,padding:'4px 8px',flexShrink:0,marginRight:4}} onClick=${()=>openEdit(r)}>✏️</button>
                   <button class="btn brd" style=${{fontSize:10,padding:'4px 8px',flexShrink:0}} onClick=${()=>del(r.id)}>✕</button>
                 </div>`;
             })}
@@ -3329,7 +3813,66 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload}){
           </div>
         </div>
       </div>
-    </div>`;
+
+      ${showCompleted&&completed.length>0?html`
+        <div style=${{marginTop:20}}>
+          <div style=${{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+            <span style=${{fontWeight:700,fontSize:13,color:'var(--gn)'}}>✅ Completed Reminders</span>
+            <span style=${{fontSize:11,color:'var(--tx3)'}}>${completed.length} done</span>
+          </div>
+          <div style=${{display:'flex',flexDirection:'column',gap:8}}>
+            ${completed.map(r=>html\`
+              <div key=${r.id} style=${{display:'flex',gap:10,padding:'10px 13px',background:'rgba(74,222,128,.04)',borderRadius:10,border:'1px solid rgba(74,222,128,.15)',alignItems:'center',opacity:.75}}>
+                <div style=${{width:32,height:32,borderRadius:8,background:'rgba(74,222,128,.1)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,flexShrink:0}}>✅</div>
+                <div style=${{flex:1,minWidth:0}}>
+                  <div style=${{fontSize:12,fontWeight:600,color:'var(--tx)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textDecoration:'line-through',opacity:.7}}>${r.task_title}</div>
+                  <span style=${{fontSize:10,color:'var(--tx3)',fontFamily:'monospace'}}>${new Date(r.remind_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>
+                </div>
+                <button class="btn brd" style=${{fontSize:10,padding:'4px 8px',flexShrink:0}} onClick=${()=>del(r.id)}>✕</button>
+              </div>\`)}
+          </div>
+        </div>`:null}
+
+      ${editReminder?html\`
+        <div class="ov" onClick=${e=>e.target===e.currentTarget&&setEditReminder(null)}>
+          <div class="mo fi" style=${{maxWidth:420}}>
+            <div style=${{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
+              <h2 style=${{fontSize:16,fontWeight:700,color:'var(--tx)'}}>✏️ Edit Reminder</h2>
+              <button class="btn bg" style=${{padding:'7px 10px'}} onClick=${()=>setEditReminder(null)}>✕</button>
+            </div>
+            <div style=${{marginBottom:12,padding:'10px 13px',background:'var(--sf2)',borderRadius:9,border:'1px solid var(--bd)'}}>
+              <div style=${{fontSize:13,fontWeight:600,color:'var(--tx)'}}>${editReminder.task_title}</div>
+            </div>
+            <div style=${{display:'flex',flexDirection:'column',gap:13}}>
+              <div style=${{display:'grid',gridTemplateColumns:'1fr 1fr',gap:11}}>
+                <div>
+                  <label class="lbl">Date *</label>
+                  <input class="inp" type="date" value=${editDate} onChange=${e=>setEditDate(e.target.value)}/>
+                </div>
+                <div>
+                  <label class="lbl">Time *</label>
+                  <input class="inp" type="time" value=${editTime} onChange=${e=>setEditTime(e.target.value)}/>
+                </div>
+              </div>
+              <div>
+                <label class="lbl">Notify me before</label>
+                <div style=${{display:'flex',gap:8,flexWrap:'wrap',marginTop:4}}>
+                  ${[5,10,15,30,60].map(m=>html\`
+                    <button key=${m} class=${'chip'+(editMins===m?' on':'')} onClick=${()=>setEditMins(m)} style=${{fontSize:12,padding:'5px 12px'}}>
+                      ${m<60?m+' min':'1 hr'}
+                    </button>\`)}
+                </div>
+              </div>
+              <div style=${{display:'flex',gap:9,justifyContent:'flex-end',paddingTop:4}}>
+                <button class="btn bg" onClick=${()=>setEditReminder(null)}>Cancel</button>
+                <button class="btn bp" onClick=${saveEdit} disabled=${saving||!editDate||!editTime}>
+                  ${saving?'Saving...':'Save Changes'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>\`:null}
+    </div>\`;
 }
 /* ─── RemindersPanel ──────────────────────────────────────────────────────── */
 function RemindersPanel({onClose,onReload}){
@@ -3389,6 +3932,8 @@ function HuddleCall({cu,users,onStateChange,cmdRef}){
   const [minimized,setMinimized]=useState(false);
   const [popupPos,setPopupPos]=useState({x:null,y:null});
   const [dragging,setDragging]=useState(false);
+  const [showEmojiPicker,setShowEmojiPicker]=useState(false);
+  const [floatingReactions,setFloatingReactions]=useState([]);
   const dragOffset=useRef({x:0,y:0});
   const mutedRef=useRef(false);
 
@@ -3447,7 +3992,16 @@ function HuddleCall({cu,users,onStateChange,cmdRef}){
         const init=safe(users).find(u=>u.id===c.initiator);
         setIncomingCall({id:c.id,name:c.name,initiatorName:(init&&init.name)||'Someone',initiator:init});
         // Browser notification for incoming call
-        showBrowserNotif('📞 Incoming Huddle',(init?init.name:'Someone')+' started a Huddle',null,{requireInteraction:true,tag:'call-'+c.id});
+        showBrowserNotif('📞 Incoming Huddle',(init?init.name:'Someone')+' started a Huddle — click to join',()=>{
+          // Focus window and navigate to dashboard when notification clicked
+          if(window.electronAPI){window.electronAPI.focusWindow();window.electronAPI.navigateTo('dashboard');}
+          else{window.focus();}
+          // Also trigger join if huddle cmd available
+          if(typeof huddleCmdRef!=='undefined'&&huddleCmdRef&&huddleCmdRef.current){
+            const cc=calls&&calls[0]||c;
+            setTimeout(()=>{if(huddleCmdRef.current.join)huddleCmdRef.current.join(cc.id,cc.name);},300);
+          }
+        },{requireInteraction:true,tag:'call-'+c.id});
       }catch(e){}
     },4000);
     return()=>clearInterval(id);
@@ -3583,7 +4137,11 @@ function HuddleCall({cu,users,onStateChange,cmdRef}){
             if(pc&&pc.signalingState==='have-local-offer'){try{await pc.setRemoteDescription(new RTCSessionDescription(data));}catch(ex){}}
           } else if(sig.type==='ice'){
             const pc=pcs.current[from];
-            if(pc&&pc.remoteDescription){try{await pc.addIceCandidate(new RTCIceCandidate(data));}catch(ex){}}
+            if(pc&&pc.remoteDescription){try{await pc.addIceCandidate(new RTCIceCandidate(data));}catch(ex){}}          } else if(sig.type==='reaction'){
+            // Show incoming reaction
+            const id=Date.now();
+            setFloatingReactions(prev=>[...prev,{id,emoji:data.emoji,x:30+Math.random()*40,label:data.from}]);
+            setTimeout(()=>setFloatingReactions(prev=>prev.filter(r=>r.id!==id)),2500);
           }
         }
       }catch(e){}
@@ -3672,6 +4230,18 @@ function HuddleCall({cu,users,onStateChange,cmdRef}){
     setPhase('idle');setMuted(false);setVideoOn(false);setElapsed(0);
     setHandRaised(false);setScreenSharing(false);setSpeaking({});
     setTargetUser(null);setMinimized(false);setShowInvite(false);
+  };
+
+  const sendReaction=(emoji)=>{
+    const id=Date.now();
+    setFloatingReactions(prev=>[...prev,{id,emoji,x:30+Math.random()*40}]);
+    setTimeout(()=>setFloatingReactions(prev=>prev.filter(r=>r.id!==id)),2500);
+    // Broadcast to others via signal
+    if(roomIdRef.current){
+      participants.filter(uid=>uid!==cu.id).forEach(uid=>{
+        api.post('/api/calls/'+roomIdRef.current+'/signal',{to_user:uid,type:'reaction',data:{emoji,from:cu.name}}).catch(()=>{});
+      });
+    }
   };
 
   const toggleMute=()=>{
@@ -3980,9 +4550,19 @@ function HuddleCall({cu,users,onStateChange,cmdRef}){
             <span style=${{fontSize:8,color:'rgba(255,255,255,.35)',lineHeight:1}}>Hand</span>
           </div>
           <!-- Emoji React -->
-          <div style=${{display:'flex',flexDirection:'column',alignItems:'center',gap:1}}>
-            <button style=${{width:44,height:44,borderRadius:13,background:'rgba(255,255,255,.09)',border:'1.5px solid rgba(255,255,255,.12)',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>😊</button>
+          <div style=${{display:'flex',flexDirection:'column',alignItems:'center',gap:1,position:'relative'}}>
+            <button onClick=${()=>setShowEmojiPicker(p=>!p)} style=${{width:44,height:44,borderRadius:13,background:showEmojiPicker?'rgba(251,191,36,.2)':'rgba(255,255,255,.09)',border:'1.5px solid '+(showEmojiPicker?'rgba(251,191,36,.4)':'rgba(255,255,255,.12)'),cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,transition:'all .15s'}}>😊</button>
             <span style=${{fontSize:8,color:'rgba(255,255,255,.35)',lineHeight:1}}>React</span>
+            ${showEmojiPicker?html`
+              <div style=${{position:'absolute',bottom:54,left:'50%',transform:'translateX(-50%)',background:'#1a1a2e',border:'1px solid rgba(255,255,255,.12)',borderRadius:14,padding:'8px 10px',display:'flex',gap:6,boxShadow:'0 8px 32px rgba(0,0,0,.6)',zIndex:100}}>
+                ${['👍','❤️','😂','🎉','🔥','👏','💯','😮'].map(em=>html`
+                  <button key=${em} onClick=${()=>{sendReaction(em);setShowEmojiPicker(false);}}
+                    style=${{background:'none',border:'none',cursor:'pointer',fontSize:22,padding:'4px',borderRadius:8,transition:'transform .1s'}}
+                    onMouseEnter=${e=>e.currentTarget.style.transform='scale(1.3)'}
+                    onMouseLeave=${e=>e.currentTarget.style.transform='scale(1)'}>
+                    ${em}
+                  </button>`)}
+              </div>`:null}
           </div>
           <!-- Invite / People -->
           <div style=${{display:'flex',flexDirection:'column',alignItems:'center',gap:1}}>
@@ -4003,7 +4583,15 @@ function HuddleCall({cu,users,onStateChange,cmdRef}){
         </div>`:null}
     </div>`:null;
 
-  return html`<div>${incomingToast}${previewPopup}${callPopup}</div>`;
+  const reactionsOverlay=floatingReactions.length>0?html`
+    <div style=${{position:'fixed',bottom:120,left:popupPos&&popupPos.x?popupPos.x+'px':'50%',zIndex:9200,pointerEvents:'none',width:200}}>
+      ${floatingReactions.map(r=>html`
+        <div key=${r.id} style=${{position:'absolute',left:r.x+'%',bottom:0,fontSize:28,animation:'floatUp 2.5s ease-out forwards',pointerEvents:'none'}}>
+          ${r.emoji}
+        </div>`)}
+    </div>`:null;
+
+  return html`<div>${incomingToast}${previewPopup}${callPopup}${reactionsOverlay}</div>`;
 }
 
 
@@ -4181,26 +4769,51 @@ function App(){
     updateBadge(unread+dmTotal);
   },[data.notifs,dmUnread]);
 
-  // Poll for due reminders every 30s
+  // Poll for due reminders every 30s + check "minutes_before" early warnings
+  const firedEarlyRef=useRef(new Set());
   useEffect(()=>{
     if(!cu)return;
-    const id=setInterval(async()=>{
+    const checkDue=async()=>{
+      // Check exact-time reminders from server
       const due=await api.get('/api/reminders/due');
       if(Array.isArray(due)&&due.length>0){
         due.forEach(r=>{
-          addToast('reminder','⏰ Reminder due!',r.task_title||'Task reminder');
-          showBrowserNotif('⏰ Reminder Due!',r.task_title||'',()=>setView('tasks'),{tag:'rem-'+r.id,requireInteraction:true});
+          addToast('reminder','⏰ Reminder: '+r.task_title,'Click to view');
+          showBrowserNotif('⏰ '+r.task_title,'Reminder is due now!',()=>{
+            setView('reminders');
+            if(window.electronAPI){window.electronAPI.focusWindow();}else{window.focus();}
+          },{tag:'rem-'+r.id,requireInteraction:true});
           playSound('reminder');
-          const nid='rn'+Date.now();
-          setData(prev=>({...prev,notifs:[
-            {id:nid,type:'reminder',content:'⏰ Reminder: '+r.task_title,read:0,ts:new Date().toISOString()},
-            ...prev.notifs
-          ]}));
         });
       }
+      // Check "minutes_before" warnings from local state
       const rems=await api.get('/api/reminders');
-      if(Array.isArray(rems)){const now=new Date();setUpcomingReminders(rems.filter(r=>new Date(r.remind_at)>=now).sort((a,b)=>new Date(a.remind_at)-new Date(b.remind_at)));}
-    },30000);
+      if(Array.isArray(rems)){
+        const now=new Date();
+        rems.forEach(r=>{
+          const remAt=new Date(r.remind_at);
+          const minsBefore=r.minutes_before||0;
+          if(minsBefore>0){
+            const warnAt=new Date(remAt.getTime()-minsBefore*60000);
+            const diff=warnAt-now;
+            const earlyKey='early-'+r.id+'-'+minsBefore;
+            // Fire if within 60s window and not already fired
+            if(diff>=-60000&&diff<=60000&&!firedEarlyRef.current.has(earlyKey)){
+              firedEarlyRef.current.add(earlyKey);
+              addToast('reminder','⏰ Coming up in '+minsBefore+'min',r.task_title);
+              showBrowserNotif('⏰ Reminder in '+minsBefore+' min',r.task_title,()=>{
+                setView('reminders');
+                if(window.electronAPI){window.electronAPI.focusWindow();}else{window.focus();}
+              },{tag:earlyKey,requireInteraction:false});
+              playSound('reminder');
+            }
+          }
+        });
+        setUpcomingReminders(rems.filter(r=>!r.fired&&new Date(r.remind_at)>=now).sort((a,b)=>new Date(a.remind_at)-new Date(b.remind_at)));
+      }
+    };
+    checkDue();
+    const id=setInterval(checkDue,30000);
     return()=>clearInterval(id);
   },[cu,addToast]);
 
@@ -4261,8 +4874,9 @@ function App(){
             ${view==='dm'?html`<${DirectMessages} cu=${cu} users=${data.users} dmUnread=${dmUnread} onDmRead=${onDmRead} onStartHuddle=${u=>{huddleCmdRef.current.openHuddle&&huddleCmdRef.current.openHuddle(u);}}/>`:null}
             ${view==='reminders'?html`<${RemindersView} cu=${cu} tasks=${data.tasks} projects=${data.projects} onSetReminder=${t=>{setReminderTask(t);}} onReload=${load}/>`:null}
             ${view==='notifs'?html`<${NotifsView} notifs=${data.notifs} reload=${load} onNavigate=${setView}/>`:null}
-            ${view==='team'&&cu.role==='Admin'?html`<${TeamView} users=${data.users} cu=${cu} reload=${load}/>`:null}
-            ${view==='settings'&&cu.role==='Admin'?html`<${WorkspaceSettings} cu=${cu} onReload=${load}/>`:null}
+            ${view==='tickets'?html`<${TicketsView} cu=${cu} users=${data.users} projects=${data.projects} onReload=${load}/>`:null}
+            ${view==='team'&&(cu.role==='Admin'||cu.role==='TeamLead')?html`<${TeamView} users=${data.users} cu=${cu} reload=${load}/>`:null}
+            ${view==='settings'&&(cu.role==='Admin'||cu.role==='TeamLead')?html`<${WorkspaceSettings} cu=${cu} onReload=${load}/>`:null}
           <//>
         </div>
       </div>

@@ -29,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -58,9 +58,6 @@ jobs:
           for src, dst in copies.items():
               if Path(src).exists():
                   shutil.copy(src, dst)
-                  print(f"  copied {src} -> {dst}")
-              else:
-                  print(f"  WARNING: {src} not found!")
 
           tauri_conf = {
             "$schema": "https://schema.tauri.app/config/2",
@@ -133,19 +130,29 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
 
-      - name: Upload to GitHub Release
+      - name: Upload .exe as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProjectFlow-Windows
+          path: |
+            target/x86_64-pc-windows-msvc/release/bundle/nsis/ProjectFlow_4.1.0_x64-setup.exe
+            target/x86_64-pc-windows-msvc/release/bundle/msi/ProjectFlow_4.1.0_x64_en-US.msi
+          if-no-files-found: error
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v4.1.0
           name: "ProjectFlow v4.1.0"
           body: |
             ## ProjectFlow Desktop v4.1.0
-            Download **ProjectFlow_x64-setup.exe** or **.msi** and run it.
+            Download **ProjectFlow_4.1.0_x64-setup.exe** and run it.
             First launch asks for your Railway URL once — then never again.
           files: |
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+            target/x86_64-pc-windows-msvc/release/bundle/nsis/ProjectFlow_4.1.0_x64-setup.exe
+            target/x86_64-pc-windows-msvc/release/bundle/msi/ProjectFlow_4.1.0_x64_en-US.msi
           draft: false
           prerelease: false
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

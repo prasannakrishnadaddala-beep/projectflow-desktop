@@ -49,9 +49,9 @@ jobs:
               Path(d).mkdir(parents=True, exist_ok=True)
 
           copies = {
-              "lib.rs":   "src-tauri/src/lib.rs",
-              "main.rs":  "src-tauri/src/main.rs",
-              "build.rs": "src-tauri/build.rs",
+              "lib.rs":       "src-tauri/src/lib.rs",
+              "main.rs":      "src-tauri/src/main.rs",
+              "build.rs":     "src-tauri/build.rs",
               "default.json": "src-tauri/capabilities/default.json",
               "index.html":   "dist/index.html",
           }
@@ -62,39 +62,30 @@ jobs:
               else:
                   print(f"  WARNING: {src} not found!")
 
-          # Write correct tauri.conf.json with all required fields
+          # Always write fresh tauri.conf.json — never copy from repo
           tauri_conf = {
             "$schema": "https://schema.tauri.app/config/2",
             "productName": "ProjectFlow",
             "version": "4.1.0",
             "identifier": "com.projectflow.app",
-            "build": {
-              "frontendDist": "../dist"
-            },
+            "build": { "frontendDist": "../dist" },
             "app": {
               "windows": [],
-              "security": {
-                "csp": None,
-                "dangerousDisableAssetCspModification": True
-              },
+              "security": { "csp": None, "dangerousDisableAssetCspModification": True },
               "withGlobalTauri": True
             },
             "bundle": {
               "active": True,
               "targets": "all",
-              "icon": [
-                "icons/32x32.png",
-                "icons/128x128.png",
-                "icons/128x128@2x.png",
-                "icons/icon.icns",
-                "icons/icon.ico"
-              ],
+              "icon": ["icons/32x32.png","icons/128x128.png","icons/128x128@2x.png","icons/icon.icns","icons/icon.ico"],
               "publisher": "FSBL",
               "category": "Productivity"
             }
           }
-          Path("src-tauri/tauri.conf.json").write_text(json.dumps(tauri_conf, indent=2))
+          conf_text = json.dumps(tauri_conf, indent=2)
+          Path("src-tauri/tauri.conf.json").write_text(conf_text)
           print("  wrote src-tauri/tauri.conf.json")
+          print("  contents:", conf_text[:100])
 
           # Write src-tauri/Cargo.toml
           cargo = textwrap.dedent("""
@@ -127,18 +118,9 @@ jobs:
           Path("src-tauri/Cargo.toml").write_text(cargo)
           print("  wrote src-tauri/Cargo.toml")
 
-          # Write root workspace Cargo.toml
-          workspace = textwrap.dedent("""
-              [workspace]
-              members = ["src-tauri"]
-              resolver = "2"
-          """).strip()
-          Path("Cargo.toml").write_text(workspace)
-          print("  wrote root Cargo.toml (workspace)")
-
-          print("\nAll files:")
-          for f in sorted(Path("src-tauri").rglob("*")):
-              print(f"  {f}")
+          # Root workspace Cargo.toml
+          Path("Cargo.toml").write_text('[workspace]\nmembers = ["src-tauri"]\nresolver = "2"\n')
+          print("  wrote root Cargo.toml")
 
       - name: Generate icons
         run: |
@@ -151,8 +133,19 @@ jobs:
           URL="${{ secrets.RAILWAY_URL }}"
           if [ -n "$URL" ]; then
             sed -i "s|https://web-production-3431b.up.railway.app|${URL}|g" src-tauri/src/lib.rs
-            echo "Patched: ${URL}"
           fi
+
+      - name: Verify config before build
+        shell: bash
+        run: |
+          echo "=== src-tauri/tauri.conf.json ==="
+          cat src-tauri/tauri.conf.json
+          echo ""
+          echo "=== src-tauri/Cargo.toml ==="
+          cat src-tauri/Cargo.toml
+          echo ""
+          echo "=== All src-tauri files ==="
+          find src-tauri -type f
 
       - name: Build Tauri app
         run: tauri build --target x86_64-pc-windows-msvc

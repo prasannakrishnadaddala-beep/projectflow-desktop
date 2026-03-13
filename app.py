@@ -3821,7 +3821,7 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload,initialView}){
             <span style=${{fontSize:11,color:'var(--tx3)'}}>${completed.length} done</span>
           </div>
           <div style=${{display:'flex',flexDirection:'column',gap:8}}>
-            ${completed.map(r=>html\`
+            ${completed.map(r=>html`
               <div key=${r.id} style=${{display:'flex',gap:10,padding:'10px 13px',background:'rgba(74,222,128,.04)',borderRadius:10,border:'1px solid rgba(74,222,128,.15)',alignItems:'center',opacity:.75}}>
                 <div style=${{width:32,height:32,borderRadius:8,background:'rgba(74,222,128,.1)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,flexShrink:0}}>✅</div>
                 <div style=${{flex:1,minWidth:0}}>
@@ -3829,11 +3829,11 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload,initialView}){
                   <span style=${{fontSize:10,color:'var(--tx3)',fontFamily:'monospace'}}>${new Date(r.remind_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>
                 </div>
                 <button class="btn brd" style=${{fontSize:10,padding:'4px 8px',flexShrink:0}} onClick=${()=>del(r.id)}>✕</button>
-              </div>\`)}
+              </div>`)}
           </div>
         </div>`:null}
 
-      ${editReminder?html\`
+      ${editReminder?html`
         <div class="ov" onClick=${e=>e.target===e.currentTarget&&setEditReminder(null)}>
           <div class="mo fi" style=${{maxWidth:420}}>
             <div style=${{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
@@ -3857,10 +3857,10 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload,initialView}){
               <div>
                 <label class="lbl">Notify me before</label>
                 <div style=${{display:'flex',gap:8,flexWrap:'wrap',marginTop:4}}>
-                  ${[5,10,15,30,60].map(m=>html\`
+                  ${[5,10,15,30,60].map(m=>html`
                     <button key=${m} class=${'chip'+(editMins===m?' on':'')} onClick=${()=>setEditMins(m)} style=${{fontSize:12,padding:'5px 12px'}}>
                       ${m<60?m+' min':'1 hr'}
-                    </button>\`)}
+                    </button>`)}
                 </div>
               </div>
               <div style=${{display:'flex',gap:9,justifyContent:'flex-end',paddingTop:4}}>
@@ -3871,8 +3871,8 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload,initialView}){
               </div>
             </div>
           </div>
-        </div>\`:null}
-    </div>\`;
+        </div>`:null}
+    </div>`;
 }
 /* ─── RemindersPanel ──────────────────────────────────────────────────────── */
 function RemindersPanel({onClose,onReload}){

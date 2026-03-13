@@ -39,22 +39,39 @@ jobs:
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli@^2
 
-      - name: Assemble src-tauri structure
+      - name: Build project structure
         shell: python
         run: |
-          import shutil, textwrap
+          import shutil, os, textwrap
           from pathlib import Path
 
-          for d in ["src-tauri/src","src-tauri/capabilities","src-tauri/icons","dist"]:
+          # Remove root Cargo.toml — it confuses Tauri
+          for bad in ["Cargo.toml", "Cargo.lock"]:
+              if Path(bad).exists():
+                  os.remove(bad)
+                  print(f"Removed root {bad}")
+
+          # Create correct folder structure
+          for d in ["src-tauri/src", "src-tauri/capabilities", "src-tauri/icons", "dist"]:
               Path(d).mkdir(parents=True, exist_ok=True)
 
-          shutil.copy("lib.rs",          "src-tauri/src/lib.rs")
-          shutil.copy("main.rs",         "src-tauri/src/main.rs")
-          shutil.copy("build.rs",        "src-tauri/build.rs")
-          shutil.copy("tauri.conf.json", "src-tauri/tauri.conf.json")
-          shutil.copy("default.json",    "src-tauri/capabilities/default.json")
-          shutil.copy("index.html",      "dist/index.html")
+          # Copy flat files into Tauri structure
+          copies = {
+              "lib.rs":          "src-tauri/src/lib.rs",
+              "main.rs":         "src-tauri/src/main.rs",
+              "build.rs":        "src-tauri/build.rs",
+              "tauri.conf.json": "src-tauri/tauri.conf.json",
+              "default.json":    "src-tauri/capabilities/default.json",
+              "index.html":      "dist/index.html",
+          }
+          for src, dst in copies.items():
+              if Path(src).exists():
+                  shutil.copy(src, dst)
+                  print(f"  copied {src} -> {dst}")
+              else:
+                  print(f"  WARNING: {src} not found!")
 
+          # Write fresh Cargo.toml inside src-tauri
           cargo = textwrap.dedent("""
               [package]
               name = "projectflow"
@@ -82,11 +99,12 @@ jobs:
               serde = { version = "1", features = ["derive"] }
               serde_json = "1"
           """).strip()
-
           Path("src-tauri/Cargo.toml").write_text(cargo)
-          print("src-tauri ready:")
+          print("  wrote src-tauri/Cargo.toml")
+
+          print("\nFinal src-tauri structure:")
           for f in sorted(Path("src-tauri").rglob("*")):
-              print(" ", f)
+              print(f"  {f}")
 
       - name: Generate icons
         run: |
@@ -107,22 +125,6 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
 
-      - name: Find built files
-        shell: bash
-        id: find_files
-        run: |
-          EXE=$(find src-tauri/target -name "*setup*.exe" 2>/dev/null | head -1)
-          MSI=$(find src-tauri/target -name "*.msi" 2>/dev/null | head -1)
-          NSIS=$(find src-tauri/target -name "*.exe" | grep -i nsis | head -1)
-          echo "Found:"
-          find src-tauri/target/x86_64-pc-windows-msvc/release/bundle -type f 2>/dev/null || true
-          BUNDLE_EXE=$(find src-tauri/target -path "*/bundle/*" -name "*.exe" 2>/dev/null | head -1)
-          BUNDLE_MSI=$(find src-tauri/target -path "*/bundle/*" -name "*.msi" 2>/dev/null | head -1)
-          echo "bundle_exe=$BUNDLE_EXE" >> $GITHUB_OUTPUT
-          echo "bundle_msi=$BUNDLE_MSI" >> $GITHUB_OUTPUT
-          echo "EXE: $BUNDLE_EXE"
-          echo "MSI: $BUNDLE_MSI"
-
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -133,8 +135,8 @@ jobs:
             Download **ProjectFlow_x64-setup.exe** or **.msi** below and run it.
             First launch asks for your Railway URL once — then never again.
           files: |
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.exe
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.msi
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
           draft: false
           prerelease: false
         env:

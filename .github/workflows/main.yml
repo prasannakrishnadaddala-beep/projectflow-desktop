@@ -1,0 +1,92 @@
+name: Build ProjectFlow Desktop
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Windows .exe
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Assemble src-tauri structure
+        shell: bash
+        run: |
+          mkdir -p src-tauri/src
+          mkdir -p src-tauri/capabilities
+          mkdir -p src-tauri/icons
+          mkdir -p dist
+          cp lib.rs           src-tauri/src/lib.rs
+          cp main.rs          src-tauri/src/main.rs
+          cp Cargo.toml       src-tauri/Cargo.toml
+          cp build.rs         src-tauri/build.rs
+          cp tauri.conf.json  src-tauri/tauri.conf.json
+          cp default.json     src-tauri/capabilities/default.json
+          cp index.html       dist/index.html
+          echo "Structure ready:"
+          find src-tauri -type f
+
+      - name: Generate icons
+        run: |
+          pip install Pillow --quiet
+          python generate_icons.py
+
+      - name: Patch Railway URL
+        shell: bash
+        run: |
+          URL="${{ secrets.RAILWAY_URL }}"
+          if [ -n "$URL" ]; then
+            sed -i "s|https://web-production-3431b.up.railway.app|${URL}|g" src-tauri/src/lib.rs
+            echo "Patched: ${URL}"
+          fi
+
+      - name: Install npm deps
+        run: npm install
+
+      - name: Build and release .exe
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ""
+        with:
+          tagName: v__VERSION__
+          releaseName: "ProjectFlow v__VERSION__"
+          releaseBody: |
+            ## ProjectFlow Desktop v__VERSION__
+
+            ### Download
+            👇 Download **ProjectFlow_x64-setup.exe** and run it — no installation needed.
+
+            - ~5MB file
+            - Native Windows WebView2 (fast, lightweight)
+            - First launch asks for your Railway URL once
+          releaseDraft: false
+          prerelease: false
+          args: --target x86_64-pc-windows-msvc

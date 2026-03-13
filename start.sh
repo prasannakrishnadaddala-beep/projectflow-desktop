@@ -1,12 +1,13 @@
 #!/bin/bash
 set -e
-PORT="${PORT:-8080}"
-echo "Starting ProjectFlow on 0.0.0.0:$PORT"
-exec /opt/venv/bin/gunicorn app:app \
-  --bind "0.0.0.0:$PORT" \
+export PORT="${PORT:-8080}"
+echo "=== ProjectFlow starting on 0.0.0.0:$PORT ==="
+exec /opt/venv/bin/python -m gunicorn app:app \
+  --bind "0.0.0.0:${PORT}" \
   --workers 1 \
-  --worker-class gthread \
+  --worker-class sync \
   --threads 4 \
   --timeout 120 \
   --access-logfile - \
-  --error-logfile -
+  --error-logfile - \
+  --log-level info

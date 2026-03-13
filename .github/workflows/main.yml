@@ -37,21 +37,55 @@ jobs:
           python-version: "3.11"
 
       - name: Assemble src-tauri structure
-        shell: bash
+        shell: python
         run: |
-          mkdir -p src-tauri/src
-          mkdir -p src-tauri/capabilities
-          mkdir -p src-tauri/icons
-          mkdir -p dist
-          cp lib.rs           src-tauri/src/lib.rs
-          cp main.rs          src-tauri/src/main.rs
-          cp Cargo.toml       src-tauri/Cargo.toml
-          cp build.rs         src-tauri/build.rs
-          cp tauri.conf.json  src-tauri/tauri.conf.json
-          cp default.json     src-tauri/capabilities/default.json
-          cp index.html       dist/index.html
-          echo "Structure ready:"
-          find src-tauri -type f
+          import os, shutil
+          from pathlib import Path
+
+          # Create folders
+          for d in ["src-tauri/src","src-tauri/capabilities","src-tauri/icons","dist"]:
+              Path(d).mkdir(parents=True, exist_ok=True)
+
+          # Copy flat files into correct Tauri locations
+          shutil.copy("lib.rs",          "src-tauri/src/lib.rs")
+          shutil.copy("main.rs",         "src-tauri/src/main.rs")
+          shutil.copy("build.rs",        "src-tauri/build.rs")
+          shutil.copy("tauri.conf.json", "src-tauri/tauri.conf.json")
+          shutil.copy("default.json",    "src-tauri/capabilities/default.json")
+          shutil.copy("index.html",      "dist/index.html")
+
+          # Write correct Cargo.toml for src-tauri (not root)
+          cargo = """[package]
+          name = "projectflow"
+          version = "4.1.0"
+          description = "ProjectFlow Desktop"
+          edition = "2021"
+
+          [lib]
+          name = "projectflow_lib"
+          crate-type = ["staticlib", "cdylib", "rlib"]
+          path = "src/lib.rs"
+
+          [[bin]]
+          name = "projectflow"
+          path = "src/main.rs"
+
+          [build-dependencies]
+          tauri-build = { version = "2", features = [] }
+
+          [dependencies]
+          tauri = { version = "2", features = ["tray-icon", "image-ico", "image-png"] }
+          tauri-plugin-notification = "2"
+          tauri-plugin-shell = "2"
+          tauri-plugin-http = "2"
+          serde = { version = "1", features = ["derive"] }
+          serde_json = "1"
+          """
+          import textwrap
+          Path("src-tauri/Cargo.toml").write_text(textwrap.dedent(cargo))
+
+          for f in sorted(Path("src-tauri").rglob("*")):
+              print(f)
 
       - name: Generate icons
         run: |
@@ -70,7 +104,7 @@ jobs:
       - name: Install npm deps
         run: npm install
 
-      - name: Build and release .exe
+      - name: Build and release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -80,13 +114,8 @@ jobs:
           releaseName: "ProjectFlow v__VERSION__"
           releaseBody: |
             ## ProjectFlow Desktop v__VERSION__
-
-            ### Download
-            👇 Download **ProjectFlow_x64-setup.exe** and run it — no installation needed.
-
-            - ~5MB file
-            - Native Windows WebView2 (fast, lightweight)
-            - First launch asks for your Railway URL once
+            Download **ProjectFlow_x64-setup.exe** and run it.
+            First launch asks for your Railway URL once — then never again.
           releaseDraft: false
           prerelease: false
           args: --target x86_64-pc-windows-msvc

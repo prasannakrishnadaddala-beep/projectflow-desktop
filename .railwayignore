@@ -1,0 +1,6 @@
+# Exclude Electron desktop files — Railway only needs the Python backend
+electron/
+assets/
+*.md
+.gitlab-ci.yml
+.gitignore

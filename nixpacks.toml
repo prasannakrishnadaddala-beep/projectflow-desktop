@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["python311"]
+
+[phases.install]
+cmds = [
+  "python3 -m venv /opt/venv",
+  "/opt/venv/bin/pip install -r requirements.txt"
+]
+
+[start]
+cmd = "/opt/venv/bin/gunicorn app:app --config gunicorn.conf.py"

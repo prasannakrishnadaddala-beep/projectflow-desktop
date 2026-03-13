@@ -1,0 +1,167 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ProjectFlow — GitLab CI/CD Pipeline
+# Deploys Flask backend to Railway, then builds Electron desktop installers
+#
+# Required GitLab CI/CD Variables (Settings → CI/CD → Variables):
+#
+#   RAILWAY_TOKEN    — Railway API token (Account Settings → Tokens)  [Masked]
+#   RAILWAY_SERVICE  — Railway service ID (from your Railway dashboard) [Masked]
+#   RAILWAY_PROJECT  — Railway project ID (from your Railway dashboard) [Masked]
+#   APP_URL          — Your Railway public URL e.g. https://xyz.up.railway.app
+#
+# Optional (for Electron builds):
+#   BUILD_ELECTRON   — set to "true" to also build desktop installers
+# ─────────────────────────────────────────────────────────────────────────────
+
+stages:
+  - test
+  - deploy
+  - build-desktop
+  - notify
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 1 — TEST
+# ─────────────────────────────────────────────────────────────────────────────
+test:syntax:
+  stage: test
+  image: python:3.11-slim
+  script:
+    - pip install flask flask-cors --quiet
+    - python -m py_compile app.py && echo "✓ app.py syntax OK"
+    - python -c "from app import app; print('✓ Flask app imports OK')"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — DEPLOY TO RAILWAY
+# ─────────────────────────────────────────────────────────────────────────────
+deploy:railway:
+  stage: deploy
+  image: alpine:latest
+  environment:
+    name: production
+    url: $APP_URL
+  before_script:
+    - apk add --no-cache curl nodejs npm git
+    # Install Railway CLI
+    - npm install -g @railway/cli --quiet
+    - railway --version
+  script:
+    - echo "━━━ Deploying to Railway ━━━"
+
+    # Authenticate with Railway
+    - railway login --browserless <<< "$RAILWAY_TOKEN" 2>/dev/null || true
+    - export RAILWAY_TOKEN="$RAILWAY_TOKEN"
+
+    # Deploy using Railway CLI — links to the correct project/service via env vars
+    - |
+      railway up \
+        --service "$RAILWAY_SERVICE" \
+        --detach \
+        --ci
+    
+    - echo "✓ Deploy triggered on Railway"
+    - echo "  Monitor at: https://railway.app/project/$RAILWAY_PROJECT"
+    - echo "  Live URL  : $APP_URL"
+
+    # Poll Railway until the deployment goes live (max 3 min)
+    - |
+      echo "Waiting for Railway deployment to go live..."
+      MAX=36  # 36 × 5s = 3 min
+      COUNT=0
+      until curl -sf "$APP_URL/" > /dev/null 2>&1; do
+        COUNT=$((COUNT+1))
+        if [ $COUNT -ge $MAX ]; then
+          echo "✗ Timed out waiting for $APP_URL"
+          exit 1
+        fi
+        echo "  ($COUNT/$MAX) Not ready yet — retrying in 5s..."
+        sleep 5
+      done
+      echo "✓ App is live at $APP_URL"
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+  needs:
+    - test:syntax
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 3 — BUILD ELECTRON DESKTOP APPS
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Write the config file with the real Railway URL before building
+.electron_setup: &electron_setup
+  - |
+    cat > electron/config.json << EOF
+    {
+      "backendUrl": "${APP_URL}",
+      "version":    "${CI_COMMIT_SHORT_SHA}",
+      "builtAt":    "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    }
+    EOF
+  - cat electron/config.json
+  - cd electron && npm ci --silent
+
+build:electron-linux:
+  stage: build-desktop
+  image: electronuserland/builder:latest
+  before_script:
+    - *electron_setup
+  script:
+    - npm run dist-linux
+    - ls -lh dist/*.AppImage dist/*.deb 2>/dev/null || true
+  artifacts:
+    name: "ProjectFlow-Linux-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - electron/dist/*.AppImage
+      - electron/dist/*.deb
+    expire_in: 30 days
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $BUILD_ELECTRON == "true"'
+    - if: '$CI_COMMIT_BRANCH == "master" && $BUILD_ELECTRON == "true"'
+  needs:
+    - deploy:railway
+
+build:electron-win:
+  stage: build-desktop
+  image: electronuserland/builder:wine
+  before_script:
+    - *electron_setup
+  script:
+    - npm run dist-win
+    - ls -lh dist/*.exe 2>/dev/null || true
+  artifacts:
+    name: "ProjectFlow-Windows-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - electron/dist/*.exe
+    expire_in: 30 days
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $BUILD_ELECTRON == "true"'
+    - if: '$CI_COMMIT_BRANCH == "master" && $BUILD_ELECTRON == "true"'
+  needs:
+    - deploy:railway
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 4 — NOTIFY
+# ─────────────────────────────────────────────────────────────────────────────
+notify:success:
+  stage: notify
+  image: alpine:latest
+  script:
+    - |
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      echo "  ✅  ProjectFlow deployed to Railway"
+      echo "  Commit  : $CI_COMMIT_SHORT_SHA"
+      echo "  Branch  : $CI_COMMIT_REF_NAME"
+      echo "  Author  : $CI_COMMIT_AUTHOR"
+      echo "  Live at : $APP_URL"
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  when: on_success
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+  needs:
+    - deploy:railway

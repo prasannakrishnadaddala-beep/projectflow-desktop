@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 420px; height: 280px;
+    background: transparent;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    overflow: hidden;
+    -webkit-app-region: drag;
+    user-select: none;
+  }
+  .card {
+    width: 100%; height: 100%;
+    background: linear-gradient(135deg, #0d0d1a 0%, #13132a 60%, #0d1a0d 100%);
+    border-radius: 18px;
+    border: 1px solid rgba(170,255,0,.2);
+    box-shadow: 0 32px 80px rgba(0,0,0,.8), 0 0 0 1px rgba(255,255,255,.04);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    position: relative;
+    overflow: hidden;
+  }
+  .glow {
+    position: absolute;
+    width: 300px; height: 300px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(170,255,0,.12) 0%, transparent 70%);
+    top: -80px; left: 50%;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 1;
+  }
+  .logo-icon {
+    width: 52px; height: 52px;
+    background: linear-gradient(135deg, #aaff00, #22c55e);
+    border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px;
+    box-shadow: 0 8px 24px rgba(170,255,0,.35);
+  }
+  .logo-text { display: flex; flex-direction: column; }
+  .logo-name {
+    font-size: 26px;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: -0.5px;
+    line-height: 1;
+  }
+  .logo-tagline {
+    font-size: 11px;
+    color: rgba(170,255,0,.7);
+    font-weight: 500;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-top: 2px;
+  }
+  .spinner-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    z-index: 1;
+  }
+  .spinner {
+    width: 28px; height: 28px;
+    border: 2.5px solid rgba(170,255,0,.15);
+    border-top-color: #aaff00;
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  #status {
+    font-size: 12px;
+    color: rgba(255,255,255,.45);
+    letter-spacing: .4px;
+  }
+  .version {
+    position: absolute;
+    bottom: 14px;
+    font-size: 10px;
+    color: rgba(255,255,255,.2);
+    z-index: 1;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .card { animation: fadeIn .4s ease; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="glow"></div>
+  <div class="logo">
+    <div class="logo-icon">⚡</div>
+    <div class="logo-text">
+      <div class="logo-name">ProjectFlow</div>
+      <div class="logo-tagline">v4.0 · Desktop</div>
+    </div>
+  </div>
+  <div class="spinner-wrap">
+    <div class="spinner"></div>
+    <div id="status">Initializing...</div>
+  </div>
+  <div class="version">Powered by Python · Flask · Electron</div>
+</div>
+</body>
+</html>

@@ -37,7 +37,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Tauri CLI
-        run: npm install -g @tauri-apps/cli@^2
+        run: npm install -g @tauri-apps/cli@2.5.0
 
       - name: Build project structure
         shell: python
@@ -62,7 +62,7 @@ jobs:
               else:
                   print(f"  WARNING: {src} not found!")
 
-          # Always write fresh tauri.conf.json — never copy from repo
+          # tauri.conf.json with package block (required by some Tauri v2 CLI versions)
           tauri_conf = {
             "$schema": "https://schema.tauri.app/config/2",
             "productName": "ProjectFlow",
@@ -82,10 +82,8 @@ jobs:
               "category": "Productivity"
             }
           }
-          conf_text = json.dumps(tauri_conf, indent=2)
-          Path("src-tauri/tauri.conf.json").write_text(conf_text)
-          print("  wrote src-tauri/tauri.conf.json")
-          print("  contents:", conf_text[:100])
+          Path("src-tauri/tauri.conf.json").write_text(json.dumps(tauri_conf, indent=2))
+          print("  wrote tauri.conf.json")
 
           # Write src-tauri/Cargo.toml
           cargo = textwrap.dedent("""
@@ -116,11 +114,10 @@ jobs:
               serde_json = "1"
           """).strip()
           Path("src-tauri/Cargo.toml").write_text(cargo)
-          print("  wrote src-tauri/Cargo.toml")
+          print("  wrote Cargo.toml")
 
-          # Root workspace Cargo.toml
           Path("Cargo.toml").write_text('[workspace]\nmembers = ["src-tauri"]\nresolver = "2"\n')
-          print("  wrote root Cargo.toml")
+          print("  wrote root workspace Cargo.toml")
 
       - name: Generate icons
         run: |
@@ -135,20 +132,11 @@ jobs:
             sed -i "s|https://web-production-3431b.up.railway.app|${URL}|g" src-tauri/src/lib.rs
           fi
 
-      - name: Verify config before build
-        shell: bash
-        run: |
-          echo "=== src-tauri/tauri.conf.json ==="
-          cat src-tauri/tauri.conf.json
-          echo ""
-          echo "=== src-tauri/Cargo.toml ==="
-          cat src-tauri/Cargo.toml
-          echo ""
-          echo "=== All src-tauri files ==="
-          find src-tauri -type f
+      - name: Show Tauri CLI version
+        run: tauri --version
 
       - name: Build Tauri app
-        run: tauri build --target x86_64-pc-windows-msvc
+        run: tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.conf.json
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
 

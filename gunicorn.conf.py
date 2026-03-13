@@ -1,32 +1,18 @@
-# gunicorn.conf.py — Production server config for ProjectFlow
-import multiprocessing
 import os
 
-# ── Binding ───────────────────────────────────────────────────────────────────
-bind = "127.0.0.1:5000"          # Nginx will reverse-proxy to this
-backlog = 64
+port = os.environ.get("PORT", os.environ.get("RAILWAY_PORT", "8080"))
+bind = f"0.0.0.0:{port}"
 
-# ── Workers ───────────────────────────────────────────────────────────────────
-# For ProjectFlow (SQLite + SSE polling) 1 worker avoids DB lock contention
 workers = 1
-worker_class = "sync"
+worker_class = "gthread"
 threads = 4
-worker_connections = 100
 timeout = 120
 keepalive = 5
 
-# ── Logging ───────────────────────────────────────────────────────────────────
-accesslog = "-"          # stdout → journald picks it up
+accesslog = "-"
 errorlog  = "-"
 loglevel  = "info"
-access_log_format = '%(h)s "%(r)s" %(s)s %(b)s %(D)sµs'
 
-# ── Process ───────────────────────────────────────────────────────────────────
-proc_name = "projectflow"
 preload_app = True
-daemon = False            # systemd manages the process
-
-# ── Environment ───────────────────────────────────────────────────────────────
-raw_env = [
-    "FLASK_ENV=production",
-]
+proc_name   = "projectflow"
+daemon      = False

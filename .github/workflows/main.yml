@@ -42,20 +42,12 @@ jobs:
       - name: Build project structure
         shell: python
         run: |
-          import shutil, os, textwrap
+          import shutil, textwrap
           from pathlib import Path
 
-          # Remove root Cargo.toml — it confuses Tauri
-          for bad in ["Cargo.toml", "Cargo.lock"]:
-              if Path(bad).exists():
-                  os.remove(bad)
-                  print(f"Removed root {bad}")
-
-          # Create correct folder structure
           for d in ["src-tauri/src", "src-tauri/capabilities", "src-tauri/icons", "dist"]:
               Path(d).mkdir(parents=True, exist_ok=True)
 
-          # Copy flat files into Tauri structure
           copies = {
               "lib.rs":          "src-tauri/src/lib.rs",
               "main.rs":         "src-tauri/src/main.rs",
@@ -71,7 +63,7 @@ jobs:
               else:
                   print(f"  WARNING: {src} not found!")
 
-          # Write fresh Cargo.toml inside src-tauri
+          # Write src-tauri/Cargo.toml
           cargo = textwrap.dedent("""
               [package]
               name = "projectflow"
@@ -102,7 +94,16 @@ jobs:
           Path("src-tauri/Cargo.toml").write_text(cargo)
           print("  wrote src-tauri/Cargo.toml")
 
-          print("\nFinal src-tauri structure:")
+          # Write root workspace Cargo.toml pointing to src-tauri
+          workspace = textwrap.dedent("""
+              [workspace]
+              members = ["src-tauri"]
+              resolver = "2"
+          """).strip()
+          Path("Cargo.toml").write_text(workspace)
+          print("  wrote root workspace Cargo.toml")
+
+          print("\nDone:")
           for f in sorted(Path("src-tauri").rglob("*")):
               print(f"  {f}")
 

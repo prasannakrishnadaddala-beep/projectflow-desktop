@@ -42,19 +42,18 @@ jobs:
       - name: Build project structure
         shell: python
         run: |
-          import shutil, textwrap
+          import shutil, textwrap, json
           from pathlib import Path
 
           for d in ["src-tauri/src", "src-tauri/capabilities", "src-tauri/icons", "dist"]:
               Path(d).mkdir(parents=True, exist_ok=True)
 
           copies = {
-              "lib.rs":          "src-tauri/src/lib.rs",
-              "main.rs":         "src-tauri/src/main.rs",
-              "build.rs":        "src-tauri/build.rs",
-              "tauri.conf.json": "src-tauri/tauri.conf.json",
-              "default.json":    "src-tauri/capabilities/default.json",
-              "index.html":      "dist/index.html",
+              "lib.rs":   "src-tauri/src/lib.rs",
+              "main.rs":  "src-tauri/src/main.rs",
+              "build.rs": "src-tauri/build.rs",
+              "default.json": "src-tauri/capabilities/default.json",
+              "index.html":   "dist/index.html",
           }
           for src, dst in copies.items():
               if Path(src).exists():
@@ -62,6 +61,40 @@ jobs:
                   print(f"  copied {src} -> {dst}")
               else:
                   print(f"  WARNING: {src} not found!")
+
+          # Write correct tauri.conf.json with all required fields
+          tauri_conf = {
+            "$schema": "https://schema.tauri.app/config/2",
+            "productName": "ProjectFlow",
+            "version": "4.1.0",
+            "identifier": "com.projectflow.app",
+            "build": {
+              "frontendDist": "../dist"
+            },
+            "app": {
+              "windows": [],
+              "security": {
+                "csp": None,
+                "dangerousDisableAssetCspModification": True
+              },
+              "withGlobalTauri": True
+            },
+            "bundle": {
+              "active": True,
+              "targets": "all",
+              "icon": [
+                "icons/32x32.png",
+                "icons/128x128.png",
+                "icons/128x128@2x.png",
+                "icons/icon.icns",
+                "icons/icon.ico"
+              ],
+              "publisher": "FSBL",
+              "category": "Productivity"
+            }
+          }
+          Path("src-tauri/tauri.conf.json").write_text(json.dumps(tauri_conf, indent=2))
+          print("  wrote src-tauri/tauri.conf.json")
 
           # Write src-tauri/Cargo.toml
           cargo = textwrap.dedent("""
@@ -94,16 +127,16 @@ jobs:
           Path("src-tauri/Cargo.toml").write_text(cargo)
           print("  wrote src-tauri/Cargo.toml")
 
-          # Write root workspace Cargo.toml pointing to src-tauri
+          # Write root workspace Cargo.toml
           workspace = textwrap.dedent("""
               [workspace]
               members = ["src-tauri"]
               resolver = "2"
           """).strip()
           Path("Cargo.toml").write_text(workspace)
-          print("  wrote root workspace Cargo.toml")
+          print("  wrote root Cargo.toml (workspace)")
 
-          print("\nDone:")
+          print("\nAll files:")
           for f in sorted(Path("src-tauri").rglob("*")):
               print(f"  {f}")
 
@@ -133,7 +166,7 @@ jobs:
           name: "ProjectFlow v4.1.0"
           body: |
             ## ProjectFlow Desktop v4.1.0
-            Download **ProjectFlow_x64-setup.exe** or **.msi** below and run it.
+            Download **ProjectFlow_x64-setup.exe** or **.msi** and run it.
             First launch asks for your Railway URL once — then never again.
           files: |
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe

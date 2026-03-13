@@ -39,10 +39,56 @@ jobs:
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli@2.5.0
 
+      - name: Generate or load signing keys
+        id: signing
+        shell: python
+        run: |
+          import subprocess, os, sys
+          from pathlib import Path
+
+          priv = os.environ.get("TAURI_SIGNING_PRIVATE_KEY", "").strip()
+          pub  = os.environ.get("TAURI_SIGNING_PUBLIC_KEY",  "").strip()
+
+          if priv and pub:
+              print("Using existing signing keys from secrets")
+              # Write to env for next steps
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write(f"TAURI_KEY={priv}\n")
+                  f.write(f"TAURI_PUBKEY={pub}\n")
+          else:
+              print("No signing keys found — generating new ones via tauri signer")
+              result = subprocess.run(
+                  ["tauri", "signer", "generate"],
+                  input="projectflow\n",
+                  capture_output=True, text=True
+              )
+              out = result.stdout + result.stderr
+              print(out)
+              # Parse keys from output
+              priv_key = ""
+              pub_key  = ""
+              for line in out.splitlines():
+                  if "Private key" in line or "private" in line.lower():
+                      priv_key = line.split(":")[-1].strip()
+                  if "Public key" in line or "public" in line.lower():
+                      pub_key = line.split(":")[-1].strip()
+              if priv_key:
+                  with open(os.environ["GITHUB_ENV"], "a") as f:
+                      f.write(f"TAURI_KEY={priv_key}\n")
+                      f.write(f"TAURI_PUBKEY={pub_key}\n")
+                  print(f"Generated keys. Add to repo secrets:\nTAURI_SIGNING_PRIVATE_KEY={priv_key}\nTAURI_SIGNING_PUBLIC_KEY={pub_key}")
+              else:
+                  print("Could not parse keys — updater signing disabled")
+                  with open(os.environ["GITHUB_ENV"], "a") as f:
+                      f.write("TAURI_KEY=\nTAURI_PUBKEY=\n")
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+
       - name: Build project structure
         shell: python
         run: |
-          import shutil, textwrap, json
+          import shutil, textwrap, json, os
           from pathlib import Path
 
           for d in ["src-tauri/src", "src-tauri/capabilities", "src-tauri/icons", "dist"]:
@@ -58,6 +104,8 @@ jobs:
           for src, dst in copies.items():
               if Path(src).exists():
                   shutil.copy(src, dst)
+
+          pub_key = os.environ.get("TAURI_PUBKEY", "").strip()
 
           tauri_conf = {
             "$schema": "https://schema.tauri.app/config/2",
@@ -75,7 +123,19 @@ jobs:
               "targets": "all",
               "icon": ["icons/32x32.png","icons/128x128.png","icons/128x128@2x.png","icons/icon.icns","icons/icon.ico"],
               "publisher": "FSBL",
-              "category": "Productivity"
+              "category": "Productivity",
+              "createUpdaterArtifacts": True
+            },
+            "plugins": {
+              "updater": {
+                "active": True,
+                "pubkey": pub_key,
+                "endpoints": [
+                  "https://github.com/prasannakrishnadaddala-beep/projectflow-desktop/releases/latest/download/latest.json"
+                ],
+                "dialog": True,
+                "installMode": "passive"
+              }
             }
           }
           Path("src-tauri/tauri.conf.json").write_text(json.dumps(tauri_conf, indent=2))
@@ -104,6 +164,8 @@ jobs:
               tauri-plugin-notification = "2"
               tauri-plugin-shell = "2"
               tauri-plugin-http = "2"
+              tauri-plugin-updater = "2"
+              tauri-plugin-process = "2"
               serde = { version = "1", features = ["derive"] }
               serde_json = "1"
           """).strip()
@@ -111,7 +173,7 @@ jobs:
           Path("Cargo.toml").write_text('[workspace]\nmembers = ["src-tauri"]\nresolver = "2"\n')
           print("Structure ready")
 
-      - name: Generate icons
+      - name: Generate icons from icon.png
         run: |
           pip install Pillow --quiet
           python generate_icons.py
@@ -122,18 +184,15 @@ jobs:
           URL="${{ secrets.RAILWAY_URL }}"
           if [ -n "$URL" ]; then
             sed -i "s|https://web-production-bde95.up.railway.app|${URL}|g" src-tauri/src/lib.rs
-            echo "Patched to: ${URL}"
-          else
-            echo "Using default URL already in lib.rs"
           fi
 
       - name: Build Tauri app
         working-directory: src-tauri
         run: tauri build --target x86_64-pc-windows-msvc
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ""
+          TAURI_SIGNING_PRIVATE_KEY: ${{ env.TAURI_KEY }}
 
-      - name: Upload .exe as artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ProjectFlow-Windows
@@ -149,10 +208,12 @@ jobs:
           name: "ProjectFlow v4.1.0"
           body: |
             ## ProjectFlow Desktop v4.1.0
-            Download **ProjectFlow_4.1.0_x64-setup.exe** and run it — no setup needed.
+            Download and install once — future updates happen automatically inside the app.
           files: |
             target/x86_64-pc-windows-msvc/release/bundle/nsis/ProjectFlow_4.1.0_x64-setup.exe
             target/x86_64-pc-windows-msvc/release/bundle/msi/ProjectFlow_4.1.0_x64_en-US.msi
+            target/x86_64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip
+            target/x86_64-pc-windows-msvc/release/bundle/nsis/*.nsis.zip.sig
           draft: false
           prerelease: false
           make_latest: true

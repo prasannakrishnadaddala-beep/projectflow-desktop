@@ -1,22 +1,32 @@
+# gunicorn.conf.py — Production server config for ProjectFlow
+import multiprocessing
 import os
 
-# Railway injects PORT env var — must bind to it
-port = os.environ.get("PORT", "5000")
-bind = f"0.0.0.0:{port}"
+# ── Binding ───────────────────────────────────────────────────────────────────
+bind = "127.0.0.1:5000"          # Nginx will reverse-proxy to this
+backlog = 64
 
-# Single worker — SQLite doesn't handle concurrent writes across workers
+# ── Workers ───────────────────────────────────────────────────────────────────
+# For ProjectFlow (SQLite + SSE polling) 1 worker avoids DB lock contention
 workers = 1
 worker_class = "sync"
 threads = 4
+worker_connections = 100
 timeout = 120
 keepalive = 5
 
-# Logging → stdout (Railway captures this)
-accesslog = "-"
+# ── Logging ───────────────────────────────────────────────────────────────────
+accesslog = "-"          # stdout → journald picks it up
 errorlog  = "-"
 loglevel  = "info"
 access_log_format = '%(h)s "%(r)s" %(s)s %(b)s %(D)sµs'
 
+# ── Process ───────────────────────────────────────────────────────────────────
+proc_name = "projectflow"
 preload_app = True
-proc_name   = "projectflow"
-daemon      = False
+daemon = False            # systemd manages the process
+
+# ── Environment ───────────────────────────────────────────────────────────────
+raw_env = [
+    "FLASK_ENV=production",
+]

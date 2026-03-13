@@ -1,0 +1,48 @@
+[Unit]
+Description=ProjectFlow — Project Management Backend
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=all
+
+User=__SERVER_USER__
+Group=__SERVER_USER__
+WorkingDirectory=__DEPLOY_PATH__
+
+# Load .env file
+EnvironmentFile=-__DEPLOY_PATH__/.env
+
+# Data directory (SQLite DB + uploads live here)
+Environment="PROJECTFLOW_DATA=__DEPLOY_PATH__/data"
+
+ExecStartPre=/bin/mkdir -p __DEPLOY_PATH__/data/pf_uploads
+ExecStart=__DEPLOY_PATH__/venv/bin/gunicorn \
+    --config __DEPLOY_PATH__/gunicorn.conf.py \
+    app:app
+
+# Graceful restart
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Hardening
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=__DEPLOY_PATH__/data
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=projectflow
+
+[Install]
+WantedBy=multi-user.target

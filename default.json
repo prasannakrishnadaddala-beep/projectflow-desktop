@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.tauri.app/config/2/capability.json",
+  "identifier": "default",
+  "description": "Default capability for ProjectFlow",
+  "windows": ["main", "setup"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-unminimize",
+    "core:window:allow-show",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "core:webview:allow-create-webview-window",
+    "notification:default",
+    "notification:allow-request-permission",
+    "notification:allow-notify",
+    "shell:default",
+    "http:default",
+    "http:allow-fetch"
+  ]
+}

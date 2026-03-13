@@ -1,0 +1,79 @@
+name: Deploy & Build
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+
+  test:
+    name: Test Python syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install flask flask-cors --quiet
+      - run: python -m py_compile app.py && echo "Syntax OK"
+
+  deploy:
+    name: Deploy to Railway
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy via Railway API
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_SERVICE: ${{ secrets.RAILWAY_SERVICE }}
+        run: |
+          R=$(curl -s -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"{ service(id: \\\"$RAILWAY_SERVICE\\\") { serviceInstances { edges { node { environmentId } } } } }\"}" \
+            https://backboard.railway.app/graphql/v2)
+          ENV=$(echo "$R" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['service']['serviceInstances']['edges'][0]['node']['environmentId'])")
+          echo "Env ID: $ENV"
+          OUT=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"mutation { serviceInstanceRedeploy(serviceId: \\\"$RAILWAY_SERVICE\\\", environmentId: \\\"$ENV\\\") }\"}" \
+            https://backboard.railway.app/graphql/v2)
+          CODE=$(echo "$OUT" | tail -n1)
+          BODY=$(echo "$OUT" | head -n-1)
+          echo "HTTP $CODE: $BODY"
+          [ "$CODE" = "200" ] || exit 1
+          echo "$BODY" | grep -q '"errors"' && exit 1 || echo "Deployed!"
+      - name: Wait for live
+        run: |
+          for i in $(seq 1 36); do
+            curl -sf "${{ secrets.APP_URL }}/" > /dev/null && echo "Live!" && exit 0
+            echo "Waiting... ($i/36)" && sleep 5
+          done && exit 1
+
+  build-windows:
+    name: Build Windows .exe
+    runs-on: windows-latest
+    needs: deploy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Write config.json
+        shell: pwsh
+        run: |
+          $url = "${{ secrets.APP_URL }}"
+          $json = "{`"backendUrl`": `"$url`", `"builtAt`": `"$(Get-Date -Format 'o')`"}"
+          Set-Content -Path config.json -Value $json
+          Write-Host "Written: $json"
+      - name: Install and build
+        run: |
+          npm install
+          npm run dist-win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProjectFlow-Windows-${{ github.sha }}
+          path: dist/*.exe
+          retention-days: 30

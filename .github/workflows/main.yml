@@ -16,10 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Remove root Cargo.toml so Tauri finds src-tauri only
-        shell: bash
-        run: rm -f Cargo.toml
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -85,7 +81,7 @@ jobs:
           """).strip()
 
           Path("src-tauri/Cargo.toml").write_text(cargo)
-          print("Files in src-tauri:")
+          print("src-tauri ready:")
           for f in sorted(Path("src-tauri").rglob("*")):
               print(" ", f)
 
@@ -106,19 +102,35 @@ jobs:
       - name: Install npm deps
         run: npm install
 
-      - name: Build and release
-        uses: tauri-apps/tauri-action@v0
+      - name: Build Tauri app
+        run: npm run tauri build -- --target x86_64-pc-windows-msvc
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ""
+
+      - name: Find built installer
+        shell: bash
+        id: find_installer
+        run: |
+          EXE=$(find src-tauri/target -name "*.exe" | grep -v deps | grep -v incremental | head -1)
+          MSI=$(find src-tauri/target -name "*.msi" | head -1)
+          echo "exe=$EXE" >> $GITHUB_OUTPUT
+          echo "msi=$MSI" >> $GITHUB_OUTPUT
+          echo "Found EXE: $EXE"
+          echo "Found MSI: $MSI"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v4.1.0
+          name: "ProjectFlow v4.1.0"
+          body: |
+            ## ProjectFlow Desktop v4.1.0
+            Download **ProjectFlow_x64-setup.exe** below and run it.
+            First launch asks for your Railway URL once — then never again.
+          files: |
+            ${{ steps.find_installer.outputs.exe }}
+            ${{ steps.find_installer.outputs.msi }}
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ""
-        with:
-          projectPath: .
-          tagName: v__VERSION__
-          releaseName: "ProjectFlow v__VERSION__"
-          releaseBody: |
-            ## ProjectFlow Desktop v__VERSION__
-            Download **ProjectFlow_x64-setup.exe** and run it.
-            First launch asks for your Railway URL once — then never again.
-          releaseDraft: false
-          prerelease: false
-          args: --target x86_64-pc-windows-msvc

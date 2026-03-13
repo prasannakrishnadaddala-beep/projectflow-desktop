@@ -88,6 +88,9 @@ def init_db():
                 id TEXT PRIMARY KEY, workspace_id TEXT, name TEXT,
                 initiator TEXT, participants TEXT DEFAULT '[]',
                 status TEXT DEFAULT 'active', created TEXT);
+            CREATE TABLE IF NOT EXISTS teams (
+                id TEXT PRIMARY KEY, workspace_id TEXT, name TEXT,
+                lead_id TEXT, member_ids TEXT DEFAULT '[]', created TEXT);
             CREATE TABLE IF NOT EXISTS tickets (
                 id TEXT PRIMARY KEY, workspace_id TEXT, title TEXT, description TEXT,
                 type TEXT DEFAULT 'bug', priority TEXT DEFAULT 'medium',
@@ -101,8 +104,16 @@ def init_db():
                 from_user TEXT, to_user TEXT, type TEXT, data TEXT,
                 consumed INTEGER DEFAULT 0, created TEXT);
         """)
+        # Add teams table if not exists (migration)
+        try: db.execute('''CREATE TABLE IF NOT EXISTS teams (
+            id TEXT PRIMARY KEY, workspace_id TEXT, name TEXT,
+            lead_id TEXT, member_ids TEXT DEFAULT '[]', created TEXT)''')
+        except: pass
         # Add tickets tables if not exists (migration)
         try: db.executescript('''
+            CREATE TABLE IF NOT EXISTS teams (
+                id TEXT PRIMARY KEY, workspace_id TEXT, name TEXT,
+                lead_id TEXT, member_ids TEXT DEFAULT '[]', created TEXT);
             CREATE TABLE IF NOT EXISTS tickets (
                 id TEXT PRIMARY KEY, workspace_id TEXT, title TEXT, description TEXT,
                 type TEXT DEFAULT 'bug', priority TEXT DEFAULT 'medium',
@@ -716,6 +727,44 @@ def update_reminder(rid):
 def delete_reminder(rid):
     with get_db() as db:
         db.execute("DELETE FROM reminders WHERE id=? AND user_id=?",(rid,session["user_id"]))
+        return jsonify({"ok":True})
+
+# ── Teams ─────────────────────────────────────────────────────────────────────
+@app.route("/api/teams", methods=["GET"])
+@login_required
+def get_teams():
+    with get_db() as db:
+        rows=db.execute("SELECT * FROM teams WHERE workspace_id=? ORDER BY created DESC",(wid(),)).fetchall()
+        return jsonify([dict(r) for r in rows])
+
+@app.route("/api/teams", methods=["POST"])
+@login_required
+def create_team():
+    d=request.json or {}
+    if not d.get("name"): return jsonify({"error":"name required"}),400
+    tid=f"tm{int(datetime.now().timestamp()*1000)}"
+    with get_db() as db:
+        db.execute("INSERT INTO teams VALUES (?,?,?,?,?,?)",
+                   (tid,wid(),d["name"],d.get("lead_id",""),json.dumps(d.get("member_ids",[])),ts()))
+        return jsonify(dict(db.execute("SELECT * FROM teams WHERE id=?",(tid,)).fetchone()))
+
+@app.route("/api/teams/<tid>", methods=["PUT"])
+@login_required
+def update_team(tid):
+    d=request.json or {}
+    with get_db() as db:
+        t=db.execute("SELECT * FROM teams WHERE id=? AND workspace_id=?",(tid,wid())).fetchone()
+        if not t: return jsonify({"error":"not found"}),404
+        db.execute("UPDATE teams SET name=?,lead_id=?,member_ids=? WHERE id=?",
+                   (d.get("name",t["name"]),d.get("lead_id",t["lead_id"]),
+                    json.dumps(d.get("member_ids",json.loads(t["member_ids"] or "[]"))),tid))
+        return jsonify(dict(db.execute("SELECT * FROM teams WHERE id=?",(tid,)).fetchone()))
+
+@app.route("/api/teams/<tid>", methods=["DELETE"])
+@login_required
+def delete_team(tid):
+    with get_db() as db:
+        db.execute("DELETE FROM teams WHERE id=? AND workspace_id=?",(tid,wid()))
         return jsonify({"ok":True})
 
 # ── Tickets ───────────────────────────────────────────────────────────────────
@@ -1632,6 +1681,12 @@ function Sidebar({cu,view,setView,onLogout,unread,dmUnread,col,setCol,wsName,cal
           onMouseLeave=${e=>{if(view!=='settings'){e.currentTarget.style.background='transparent';e.currentTarget.style.color='rgba(255,255,255,.32)';}}}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
+        <button title="Sign Out" onClick=${onLogout}
+          style=${{width:40,height:40,borderRadius:12,border:'none',cursor:'pointer',background:'transparent',color:'rgba(255,80,80,.45)',display:'flex',alignItems:'center',justifyContent:'center',transition:'all .14s',marginTop:2}}
+          onMouseEnter=${e=>{e.currentTarget.style.background='rgba(239,68,68,.15)';e.currentTarget.style.color='#f87171';}}
+          onMouseLeave=${e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.color='rgba(255,80,80,.45)';}}>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </button>
       </div>
     </aside>`;
 }
@@ -2539,6 +2594,11 @@ function Dashboard({cu,tasks,projects,users,onNav}){
   const done=t.filter(x=>x.stage==='completed').length;
   const active=t.filter(x=>x.stage!=='completed'&&x.stage!=='backlog').length;
   const blocked=t.filter(x=>x.stage==='blocked').length;
+  const [tickets,setTickets]=useState([]);
+  useEffect(()=>{api.get('/api/tickets').then(d=>setTickets(Array.isArray(d)?d:[]));},[]);
+  const openTickets=tickets.filter(x=>x.status==='open').length;
+  const inProgressTickets=tickets.filter(x=>x.status==='in-progress').length;
+  const myTickets=tickets.filter(x=>x.assignee===cu.id&&x.status!=='closed'&&x.status!=='resolved').length;
   const stageChart=Object.entries(STAGES).map(([k,v])=>({name:v.label,count:t.filter(x=>x.stage===k).length,color:v.color})).filter(d=>d.count>0);
   const activeProjectIds=new Set(p.map(proj=>proj.id));
   const activeTasks=t.filter(x=>activeProjectIds.has(x.project)&&x.stage!=='completed');
@@ -2548,8 +2608,11 @@ function Dashboard({cu,tasks,projects,users,onNav}){
     {label:'Active Tasks',  val:active,     color:'var(--cy)', bg:'rgba(34,211,238,.08)',  icon:html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`,nav:'tasks'},
     {label:'Completed',     val:done,       color:'var(--gn)', bg:'rgba(62,207,110,.08)',  icon:html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,nav:'tasks'},
     {label:'Blocked',       val:blocked,    color:'var(--rd)', bg:'rgba(255,68,68,.08)',   icon:html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`,nav:'tasks'},
-    {label:'My Tasks',      val:myT.length, color:'var(--am)', bg:'rgba(245,158,11,.08)',  icon:html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,nav:'tasks'},
-    {label:'Team Members',  val:u.length,   color:'var(--pu)', bg:'rgba(167,139,250,.08)', icon:html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,nav:'team'},
+    {label:'My Tasks',      val:myT.length,         color:'var(--am)', bg:'rgba(245,158,11,.08)',  icon:html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,nav:'tasks'},
+    {label:'Team Members',  val:u.length,           color:'var(--pu)', bg:'rgba(167,139,250,.08)', icon:html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,nav:'team'},
+    {label:'Open Tickets',  val:openTickets,        color:'var(--cy)', bg:'rgba(34,211,238,.08)',  icon:html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1.5a1.5 1.5 0 0 0 0 3V15a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1.5a1.5 1.5 0 0 0 0-3V9z"/><line x1="9" y1="7" x2="9" y2="17" strokeDasharray="2 2"/></svg>`,nav:'tickets'},
+    {label:'In Progress',   val:inProgressTickets,  color:'var(--am)', bg:'rgba(245,158,11,.08)',  icon:html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,nav:'tickets'},
+    {label:'My Tickets',    val:myTickets,          color:'var(--or)', bg:'rgba(251,146,60,.08)',  icon:html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,nav:'tickets'},
   ];
   return html`
     <div class="fi" style=${{height:'100%',overflowY:'auto',padding:'16px 20px',display:'flex',flexDirection:'column',gap:14}}>
@@ -2563,7 +2626,7 @@ function Dashboard({cu,tasks,projects,users,onNav}){
 
       </div>
       <!-- Stat cards — HubSpot "34 Deals / 20 Won / 3 Lost" style -->
-      <div style=${{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10}}>
+      <div style=${{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:10}}>
         ${stats.map((s,i)=>html`
           <div key=${i} onClick=${()=>onNav(s.nav)}
             style=${{background:'var(--sf)',borderRadius:16,padding:'14px 16px',position:'relative',overflow:'hidden',cursor:'pointer',transition:'all .16s',border:'1px solid var(--bd2)'}}
@@ -2869,31 +2932,120 @@ function NotifsView({notifs,reload,onNavigate}){
 
 /* ─── TeamView ────────────────────────────────────────────────────────────── */
 function TeamView({users,cu,reload}){
+  const [tab,setTab]=useState('members');
+  // Members tab state
   const [showNew,setShowNew]=useState(false);const [name,setName]=useState('');const [email,setEmail]=useState('');const [pw,setPw]=useState('');const [role,setRole]=useState('Developer');const [err,setErr]=useState('');
+  // Teams tab state
+  const [teams,setTeams]=useState([]);const [showNewTeam,setShowNewTeam]=useState(false);
+  const [editTeam,setEditTeam]=useState(null);
+  const [tName,setTName]=useState('');const [tLead,setTLead]=useState('');const [tMembers,setTMembers]=useState([]);
+  const [savingTeam,setSavingTeam]=useState(false);
+
+  const loadTeams=useCallback(async()=>{const d=await api.get('/api/teams');setTeams(Array.isArray(d)?d:[]);},[]);
+  useEffect(()=>{loadTeams();},[loadTeams]);
+
   const add=async()=>{if(!name||!email||!pw){setErr('All fields required.');return;}setErr('');const r=await api.post('/api/users',{name,email,password:pw,role});if(r.error)setErr(r.error);else{await reload();setShowNew(false);setName('');setEmail('');setPw('');}};
+
+  const openNewTeam=()=>{setEditTeam(null);setTName('');setTLead('');setTMembers([]);setShowNewTeam(true);};
+  const openEditTeam=t=>{setEditTeam(t);setTName(t.name);setTLead(t.lead_id||'');setTMembers(JSON.parse(t.member_ids||'[]'));setShowNewTeam(true);};
+  const saveTeam=async()=>{
+    if(!tName.trim())return;
+    setSavingTeam(true);
+    const payload={name:tName,lead_id:tLead,member_ids:tMembers};
+    if(editTeam)await api.put('/api/teams/'+editTeam.id,payload);
+    else await api.post('/api/teams',payload);
+    setSavingTeam(false);setShowNewTeam(false);setEditTeam(null);
+    loadTeams();
+  };
+  const delTeam=async id=>{if(!window.confirm('Delete this team?'))return;await api.del('/api/teams/'+id);loadTeams();};
+  const toggleMember=id=>{setTMembers(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);};
+
+  const umap=safe(users).reduce((a,u)=>{a[u.id]=u;return a;},{});
+  const ROLE_COLORS={Admin:'var(--ac)',TeamLead:'var(--cy)',Developer:'var(--pu)',Tester:'var(--am)',Viewer:'var(--tx3)'};
+
   return html`<div class="fi" style=${{height:'100%',overflowY:'auto',padding:'18px 22px'}}>
-    <div style=${{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
-      <span style=${{fontSize:13,color:'var(--tx2)'}}>${safe(users).length} members in workspace</span>
-      <button class="btn bp" onClick=${()=>setShowNew(true)}>+ Add Member</button>
+    <!-- Tab switcher -->
+    <div style=${{display:'flex',gap:4,marginBottom:18,background:'var(--sf2)',borderRadius:12,padding:4,width:'fit-content',border:'1px solid var(--bd)'}}>
+      ${['members','teams'].map(t=>html`
+        <button key=${t} class="btn" onClick=${()=>setTab(t)}
+          style=${{padding:'6px 18px',borderRadius:9,fontSize:12,fontWeight:600,border:'none',cursor:'pointer',
+            background:tab===t?'var(--ac)':'transparent',color:tab===t?'var(--ac-tx)':'var(--tx2)',transition:'all .14s'}}>
+          ${t==='members'?'👥 Members':'🏷 Sub-Teams'}
+        </button>`)}
     </div>
-    <div class="card" style=${{padding:0,overflow:'hidden',maxWidth:820}}>
-      <table style=${{width:'100%',borderCollapse:'collapse'}}>
-        <thead><tr style=${{borderBottom:'1px solid var(--bd)',background:'var(--sf2)'}}>
-          ${['Member','Email','Role',''].map((h,i)=>html`<th key=${i} style=${{padding:'9px 15px',textAlign:'left',fontSize:10,fontFamily:'monospace',color:'var(--tx3)',textTransform:'uppercase',letterSpacing:.5}}>${h}</th>`)}
-        </tr></thead>
-        <tbody>
-          ${safe(users).map((u,i)=>html`<tr key=${u.id} style=${{borderBottom:i<safe(users).length-1?'1px solid var(--bd)':'none'}}>
-            <td style=${{padding:'11px 15px'}}><div style=${{display:'flex',alignItems:'center',gap:10}}><${Av} u=${u} size=${32}/><div><div style=${{fontSize:13,fontWeight:600,color:'var(--tx)',display:'flex',alignItems:'center',gap:6}}>${u.name}${u.id===cu.id?html`<span style=${{fontSize:9,color:'var(--ac)',background:'rgba(99,102,241,.14)',padding:'2px 6px',borderRadius:4,fontFamily:'monospace'}}>YOU</span>`:null}</div></div></div></td>
-            <td style=${{padding:'11px 15px'}}><span style=${{fontSize:12,color:'var(--tx2)',fontFamily:'monospace'}}>${u.email}</span></td>
-            <td style=${{padding:'11px 15px'}}><select class="sel" style=${{width:130,padding:'6px 28px 6px 10px'}} value=${u.role} onChange=${e=>api.put('/api/users/'+u.id,{role:e.target.value}).then(reload)} disabled=${u.id===cu.id}>${ROLES.map(r=>html`<option key=${r}>${r}</option>`)}</select></td>
-            <td style=${{padding:'11px 15px'}}>${u.id!==cu.id?html`<button class="btn brd" style=${{padding:'5px 11px',fontSize:12}} onClick=${()=>window.confirm('Remove '+u.name+'?')&&api.del('/api/users/'+u.id).then(reload)}>🗑 Remove</button>`:null}</td>
-          </tr>`)}
-        </tbody>
-      </table>
-    </div>
+
+    ${tab==='members'?html`
+      <div style=${{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+        <span style=${{fontSize:13,color:'var(--tx2)'}}>${safe(users).length} members in workspace</span>
+        <button class="btn bp" onClick=${()=>setShowNew(true)}>+ Add Member</button>
+      </div>
+      <div class="card" style=${{padding:0,overflow:'hidden',maxWidth:820}}>
+        <table style=${{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style=${{borderBottom:'1px solid var(--bd)',background:'var(--sf2)'}}>
+            ${['Member','Email','Role',''].map((h,i)=>html`<th key=${i} style=${{padding:'9px 15px',textAlign:'left',fontSize:10,fontFamily:'monospace',color:'var(--tx3)',textTransform:'uppercase',letterSpacing:.5}}>${h}</th>`)}
+          </tr></thead>
+          <tbody>
+            ${safe(users).map((u,i)=>html`<tr key=${u.id} style=${{borderBottom:i<safe(users).length-1?'1px solid var(--bd)':'none'}}>
+              <td style=${{padding:'11px 15px'}}><div style=${{display:'flex',alignItems:'center',gap:10}}><${Av} u=${u} size=${32}/><div><div style=${{fontSize:13,fontWeight:600,color:'var(--tx)',display:'flex',alignItems:'center',gap:6}}>${u.name}${u.id===cu.id?html`<span style=${{fontSize:9,color:'var(--ac)',background:'rgba(99,102,241,.14)',padding:'2px 6px',borderRadius:4,fontFamily:'monospace'}}>YOU</span>`:null}</div><div style=${{fontSize:10,color:ROLE_COLORS[u.role]||'var(--tx3)',marginTop:2}}>${u.role}</div></div></div></td>
+              <td style=${{padding:'11px 15px'}}><span style=${{fontSize:12,color:'var(--tx2)',fontFamily:'monospace'}}>${u.email}</span></td>
+              <td style=${{padding:'11px 15px'}}><select class="sel" style=${{width:130,padding:'6px 28px 6px 10px'}} value=${u.role} onChange=${e=>api.put('/api/users/'+u.id,{role:e.target.value}).then(reload)} disabled=${u.id===cu.id&&cu.role==='Admin'}>${ROLES.map(r=>html`<option key=${r}>${r}</option>`)}</select></td>
+              <td style=${{padding:'11px 15px'}}>${u.id!==cu.id?html`<button class="btn brd" style=${{padding:'5px 11px',fontSize:12}} onClick=${()=>window.confirm('Remove '+u.name+'?')&&api.del('/api/users/'+u.id).then(reload)}>🗑 Remove</button>`:null}</td>
+            </tr>`)}
+          </tbody>
+        </table>
+      </div>`:null}
+
+    ${tab==='teams'?html`
+      <div style=${{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+        <div>
+          <div style=${{fontSize:14,fontWeight:700,color:'var(--tx)'}}>Sub-Teams</div>
+          <div style=${{fontSize:12,color:'var(--tx2)',marginTop:2}}>Group members into teams. Each team can have a lead and assigned members.</div>
+        </div>
+        <button class="btn bp" onClick=${openNewTeam}>+ New Team</button>
+      </div>
+      ${teams.length===0?html`
+        <div style=${{textAlign:'center',padding:'40px 16px',color:'var(--tx3)',fontSize:13,background:'var(--sf)',borderRadius:12,border:'1px dashed var(--bd)'}}>
+          <div style=${{fontSize:32,marginBottom:10}}>🏷</div>
+          <div style=${{fontWeight:600,marginBottom:4}}>No teams yet</div>
+          <div>Create sub-teams to group members and manage multi-team workflows</div>
+        </div>`:null}
+      <div style=${{display:'flex',flexDirection:'column',gap:10}}>
+        ${teams.map(t=>{
+          const members=JSON.parse(t.member_ids||'[]').map(id=>umap[id]).filter(Boolean);
+          const lead=t.lead_id?umap[t.lead_id]:null;
+          return html`
+          <div key=${t.id} class="card" style=${{display:'flex',gap:14,alignItems:'flex-start'}}>
+            <div style=${{width:44,height:44,borderRadius:12,background:'var(--ac3)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,flexShrink:0}}>🏷</div>
+            <div style=${{flex:1,minWidth:0}}>
+              <div style=${{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                <span style=${{fontSize:14,fontWeight:700,color:'var(--tx)'}}>${t.name}</span>
+                <span style=${{fontSize:11,color:'var(--tx3)'}}>${members.length} member${members.length!==1?'s':''}</span>
+              </div>
+              ${lead?html`<div style=${{display:'flex',alignItems:'center',gap:6,marginBottom:8}}>
+                <span style=${{fontSize:11,color:'var(--tx3)'}}>Lead:</span>
+                <${Av} u=${lead} size=${20}/>
+                <span style=${{fontSize:12,fontWeight:600,color:'var(--cy)'}}>${lead.name}</span>
+              </div>`:null}
+              <div style=${{display:'flex',gap:6,flexWrap:'wrap'}}>
+                ${members.map(m=>html`
+                  <div key=${m.id} style=${{display:'flex',alignItems:'center',gap:5,padding:'3px 8px',background:'var(--sf2)',borderRadius:20,border:'1px solid var(--bd)'}}>
+                    <${Av} u=${m} size=${18}/>
+                    <span style=${{fontSize:11,color:'var(--tx2)'}}>${m.name}</span>
+                  </div>`)}
+              </div>
+            </div>
+            <div style=${{display:'flex',gap:6,flexShrink:0}}>
+              <button class="btn bg" style=${{padding:'6px 10px',fontSize:12}} onClick=${()=>openEditTeam(t)}>✏️ Edit</button>
+              <button class="btn brd" style=${{padding:'6px 10px',fontSize:12,color:'var(--rd)'}} onClick=${()=>delTeam(t.id)}>🗑</button>
+            </div>
+          </div>`;
+        })}
+      </div>`:null}
+
+    <!-- Add Member Modal -->
     ${showNew?html`<div class="ov" onClick=${e=>e.target===e.currentTarget&&setShowNew(false)}>
       <div class="mo fi" style=${{maxWidth:400}}>
-        <div style=${{display:'flex',justifyContent:'space-between',marginBottom:18}}><h2 style=${{fontSize:17,fontWeight:700,color:'var(--tx)'}}>Add Member</h2><button class="btn bg" style=${{padding:'7px 10px'}} onClick=${()=>setShowNew(false)}>✕</button></div>
+        <div style=${{display:'flex',justifyContent:'space-between',marginBottom:18}}><h2 style=${{fontSize:17,fontWeight:700,color:'var(--tx)'}}>👤 Add Member</h2><button class="btn bg" style=${{padding:'7px 10px'}} onClick=${()=>setShowNew(false)}>✕</button></div>
         <div style=${{display:'flex',flexDirection:'column',gap:11}}>
           <input class="inp" placeholder="Full Name" value=${name} onInput=${e=>setName(e.target.value)}/>
           <input class="inp" type="email" placeholder="Email" value=${email} onInput=${e=>setEmail(e.target.value)}/>
@@ -2903,6 +3055,51 @@ function TeamView({users,cu,reload}){
           <div style=${{display:'flex',gap:9,justifyContent:'flex-end'}}>
             <button class="btn bg" onClick=${()=>setShowNew(false)}>Cancel</button>
             <button class="btn bp" onClick=${add}>Add Member</button>
+          </div>
+        </div>
+      </div>
+    </div>`:null}
+
+    <!-- New / Edit Team Modal -->
+    ${showNewTeam?html`<div class="ov" onClick=${e=>e.target===e.currentTarget&&setShowNewTeam(false)}>
+      <div class="mo fi" style=${{maxWidth:480}}>
+        <div style=${{display:'flex',justifyContent:'space-between',marginBottom:18}}>
+          <h2 style=${{fontSize:16,fontWeight:700,color:'var(--tx)'}}>${editTeam?'✏️ Edit Team':'🏷 New Sub-Team'}</h2>
+          <button class="btn bg" style=${{padding:'7px 10px'}} onClick=${()=>setShowNewTeam(false)}>✕</button>
+        </div>
+        <div style=${{display:'flex',flexDirection:'column',gap:13}}>
+          <div>
+            <label class="lbl">Team Name *</label>
+            <input class="inp" value=${tName} onInput=${e=>setTName(e.target.value)} placeholder="e.g. Frontend, Backend, QA, Design…"/>
+          </div>
+          <div>
+            <label class="lbl">Team Lead</label>
+            <select class="inp" value=${tLead} onChange=${e=>setTLead(e.target.value)}>
+              <option value="">— No lead —</option>
+              ${safe(users).map(u=>html`<option key=${u.id} value=${u.id}>${u.name} (${u.role})</option>`)}
+            </select>
+          </div>
+          <div>
+            <label class="lbl">Members</label>
+            <div style=${{display:'flex',flexDirection:'column',gap:6,maxHeight:200,overflowY:'auto',border:'1px solid var(--bd)',borderRadius:9,padding:'8px 12px',background:'var(--sf2)'}}>
+              ${safe(users).map(u=>html`
+                <label key=${u.id} style=${{display:'flex',alignItems:'center',gap:10,cursor:'pointer',padding:'5px 0'}}>
+                  <input type="checkbox" checked=${tMembers.includes(u.id)} onChange=${()=>toggleMember(u.id)}
+                    style=${{width:16,height:16,accentColor:'var(--ac)',cursor:'pointer'}}/>
+                  <${Av} u=${u} size=${24}/>
+                  <div>
+                    <div style=${{fontSize:12,fontWeight:600,color:'var(--tx)'}}>${u.name}</div>
+                    <div style=${{fontSize:10,color:ROLE_COLORS[u.role]||'var(--tx3)'}}>${u.role}</div>
+                  </div>
+                </label>`)}
+            </div>
+            <div style=${{fontSize:11,color:'var(--tx3)',marginTop:4}}>${tMembers.length} member${tMembers.length!==1?'s':''} selected</div>
+          </div>
+          <div style=${{display:'flex',gap:9,justifyContent:'flex-end',paddingTop:4}}>
+            <button class="btn bg" onClick=${()=>setShowNewTeam(false)}>Cancel</button>
+            <button class="btn bp" onClick=${saveTeam} disabled=${savingTeam||!tName.trim()}>
+              ${savingTeam?'Saving...':editTeam?'Save Changes':'Create Team'}
+            </button>
           </div>
         </div>
       </div>
@@ -3213,6 +3410,25 @@ function TicketsView({cu,users,projects,onReload}){
 /* ─── WorkspaceSettings ───────────────────────────────────────────────────── */
 function WorkspaceSettings({cu,onReload}){
   const [ws,setWs]=useState(null);const [wsName,setWsName]=useState('');const [aiKey,setAiKey]=useState('');const [showKey,setShowKey]=useState(false);const [saving,setSaving]=useState(false);const [saved,setSaved]=useState(false);
+  const PERM_DEFAULTS={
+    'Create & Edit Projects':{Admin:true,TeamLead:true,Developer:false,Tester:false,Viewer:false},
+    'Create & Assign Tasks':{Admin:true,TeamLead:true,Developer:true,Tester:false,Viewer:false},
+    'Edit Own Tasks':{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:false},
+    'Create Tickets':{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:false},
+    'Close / Resolve Tickets':{Admin:true,TeamLead:true,Developer:true,Tester:false,Viewer:false},
+    'Send Channel Messages':{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:true},
+    'Manage Team Members':{Admin:true,TeamLead:true,Developer:false,Tester:false,Viewer:false},
+    'Manage Workspace Settings':{Admin:true,TeamLead:false,Developer:false,Tester:false,Viewer:false},
+    'View All Projects':{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:true},
+    'Start Huddle Calls':{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:true},
+  };
+  const storedPerms=()=>{try{return JSON.parse(localStorage.getItem('pf_perms')||'null');}catch{return null;}};
+  const [perms,setPerms]=useState(()=>storedPerms()||PERM_DEFAULTS);
+  const togglePerm=(label,role)=>{
+    if(role==='Admin')return;// Admin always has all perms
+    setPerms(prev=>{const n={...prev,[label]:{...prev[label],[role]:!prev[label][role]}};localStorage.setItem('pf_perms',JSON.stringify(n));return n;});
+  };
+  const resetPerms=()=>{setPerms(PERM_DEFAULTS);localStorage.removeItem('pf_perms');};
 
   useEffect(()=>{api.get('/api/workspace').then(d=>{if(!d.error){setWs(d);setWsName(d.name||'');setAiKey(d.ai_api_key?'•'.repeat(20):'');}});},[]);
 
@@ -3238,6 +3454,66 @@ function WorkspaceSettings({cu,onReload}){
   return html`<div class="fi" style=${{height:'100%',overflowY:'auto',padding:'24px'}}>
     <div style=${{maxWidth:640}}>
       <h2 style=${{fontSize:17,fontWeight:700,color:'var(--tx)',marginBottom:20}}>⚙ Workspace Settings</h2>
+
+      <div class="card" style=${{marginBottom:16}}>
+        <h3 style=${{fontSize:13,fontWeight:700,color:'var(--tx)',marginBottom:4}}>🎨 Theme & Accent Color</h3>
+        <p style=${{fontSize:12,color:'var(--tx2)',marginBottom:14}}>Choose a preset or set a custom accent color for the UI.</p>
+        <div style=${{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center',marginBottom:12}}>
+          ${[
+            {name:'Lime',    ac:'#aaff00',ac2:'#99ee00',tx:'#0d1f00'},
+            {name:'Cyan',    ac:'#22d3ee',ac2:'#06b6d4',tx:'#001a1f'},
+            {name:'Purple',  ac:'#a78bfa',ac2:'#8b5cf6',tx:'#1a0a2e'},
+            {name:'Pink',    ac:'#f472b6',ac2:'#ec4899',tx:'#2d001a'},
+            {name:'Orange',  ac:'#fb923c',ac2:'#f97316',tx:'#2d0f00'},
+            {name:'Green',   ac:'#4ade80',ac2:'#22c55e',tx:'#002d10'},
+          ].map(({name,ac,ac2,tx})=>html`
+            <button key=${name} title=${name}
+              onClick=${()=>{
+                const r=document.documentElement.style;
+                r.setProperty('--ac',ac);r.setProperty('--ac2',ac2);
+                const hex=ac.replace('#','');const bigint=parseInt(hex,16);
+                const ri=Math.round((bigint>>16)&255),gi=Math.round((bigint>>8)&255),bi=Math.round(bigint&255);
+                r.setProperty('--ac3','rgba('+ri+','+gi+','+bi+',.10)');
+                r.setProperty('--ac4','rgba('+ri+','+gi+','+bi+',.06)');
+                r.setProperty('--ac-tx',tx);
+                localStorage.setItem('pf_accent',JSON.stringify({ac,ac2,tx}));
+              }}
+              style=${{width:34,height:34,borderRadius:10,background:ac,border:'3px solid '+(localStorage.getItem('pf_accent')&&JSON.parse(localStorage.getItem('pf_accent')).ac===ac?'var(--tx)':'transparent'),cursor:'pointer',transition:'all .14s',boxShadow:'0 2px 8px rgba(0,0,0,.25)'}}
+              onMouseEnter=${e=>e.currentTarget.style.transform='scale(1.15)'}
+              onMouseLeave=${e=>e.currentTarget.style.transform='scale(1)'}
+            ></button>`)}
+          <div style=${{display:'flex',alignItems:'center',gap:8,marginLeft:4}}>
+            <label style=${{fontSize:12,color:'var(--tx2)'}}>Custom:</label>
+            <input type="color" defaultValue="#aaff00"
+              style=${{width:34,height:34,borderRadius:10,border:'2px solid var(--bd)',cursor:'pointer',background:'none',padding:2}}
+              onChange=${e=>{
+                const hex=e.target.value;
+                const r=document.documentElement.style;
+                r.setProperty('--ac',hex);
+                const darker='#'+hex.slice(1).replace(/../g,c=>Math.max(0,parseInt(c,16)-16).toString(16).padStart(2,'0'));
+                r.setProperty('--ac2',darker);
+                const bigint=parseInt(hex.replace('#',''),16);
+                const ri=Math.round((bigint>>16)&255),gi=Math.round((bigint>>8)&255),bi=Math.round(bigint&255);
+                r.setProperty('--ac3','rgba('+ri+','+gi+','+bi+',.10)');
+                r.setProperty('--ac4','rgba('+ri+','+gi+','+bi+',.06)');
+                const lum=(0.299*ri+0.587*gi+0.114*bi)/255;
+                const tx=lum>0.6?'#111111':'#f5f5f5';
+                r.setProperty('--ac-tx',tx);
+                localStorage.setItem('pf_accent',JSON.stringify({ac:hex,ac2:darker,tx}));
+              }}/>
+          </div>
+          <button class="btn brd" style=${{fontSize:11,padding:'5px 10px',marginLeft:4}} onClick=${()=>{
+            const r=document.documentElement.style;
+            r.setProperty('--ac','#aaff00');r.setProperty('--ac2','#99ee00');
+            r.setProperty('--ac3','rgba(170,255,0,.10)');r.setProperty('--ac4','rgba(170,255,0,.06)');
+            r.setProperty('--ac-tx','#0d1f00');
+            localStorage.removeItem('pf_accent');
+          }}>↺ Reset</button>
+        </div>
+        <div style=${{fontSize:11,color:'var(--tx3)',padding:'8px 12px',background:'var(--sf2)',borderRadius:8,border:'1px solid var(--bd)'}}>
+          Preview: <span style=${{color:'var(--ac)',fontWeight:700}}>Active color</span> · <button class="btn bp" style=${{fontSize:10,padding:'2px 8px',marginLeft:4}}>Sample button</button>
+        </div>
+      </div>
 
       <div class="card" style=${{marginBottom:16}}>
         <h3 style=${{fontSize:13,fontWeight:700,color:'var(--tx)',marginBottom:16}}>🏢 Workspace</h3>
@@ -3277,44 +3553,40 @@ function WorkspaceSettings({cu,onReload}){
       </div>
 
       <div class="card" style=${{marginBottom:16}}>
-        <h3 style=${{fontSize:13,fontWeight:700,color:'var(--tx)',marginBottom:4}}>🔐 Role Permissions</h3>
-        <p style=${{fontSize:12,color:'var(--tx2)',marginBottom:14}}>Control what each role can do in the workspace.</p>
+        <div style=${{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+          <h3 style=${{fontSize:13,fontWeight:700,color:'var(--tx)'}}>🔐 Role Permissions</h3>
+          <button class="btn brd" style=${{fontSize:11,padding:'4px 10px'}} onClick=${resetPerms}>↺ Reset defaults</button>
+        </div>
+        <p style=${{fontSize:12,color:'var(--tx2)',marginBottom:14}}>Click checkboxes to toggle permissions per role. Admin always has full access.</p>
         <div style=${{overflowX:'auto'}}>
           <table style=${{width:'100%',borderCollapse:'collapse',fontSize:12}}>
             <thead>
               <tr>
                 <th style=${{padding:'8px 12px',textAlign:'left',color:'var(--tx3)',fontWeight:600,borderBottom:'1px solid var(--bd)'}}>Permission</th>
                 ${['Admin','TeamLead','Developer','Tester','Viewer'].map(r=>html`
-                  <th key=${r} style=${{padding:'8px 12px',textAlign:'center',color:'var(--tx3)',fontWeight:600,borderBottom:'1px solid var(--bd)',minWidth:80}}>${r}</th>`)}
+                  <th key=${r} style=${{padding:'8px 12px',textAlign:'center',color:r==='Admin'?'var(--ac)':'var(--tx3)',fontWeight:700,borderBottom:'1px solid var(--bd)',minWidth:80,fontSize:11}}>
+                    ${r}${r==='Admin'?html`<div style=${{fontSize:9,fontWeight:400,color:'var(--tx3)'}}>locked</div>`:null}
+                  </th>`)}
               </tr>
             </thead>
             <tbody>
-              ${[
-                {label:'Create & Edit Projects',perms:{Admin:true,TeamLead:true,Developer:false,Tester:false,Viewer:false}},
-                {label:'Create & Assign Tasks',perms:{Admin:true,TeamLead:true,Developer:true,Tester:false,Viewer:false}},
-                {label:'Edit Own Tasks',perms:{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:false}},
-                {label:'Create Tickets',perms:{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:false}},
-                {label:'Close / Resolve Tickets',perms:{Admin:true,TeamLead:true,Developer:true,Tester:false,Viewer:false}},
-                {label:'Send Channel Messages',perms:{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:true}},
-                {label:'Manage Team Members',perms:{Admin:true,TeamLead:true,Developer:false,Tester:false,Viewer:false}},
-                {label:'Manage Workspace Settings',perms:{Admin:true,TeamLead:false,Developer:false,Tester:false,Viewer:false}},
-                {label:'View All Projects',perms:{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:true}},
-                {label:'Start Huddle Calls',perms:{Admin:true,TeamLead:true,Developer:true,Tester:true,Viewer:true}},
-              ].map((row,i)=>html`
-                <tr key=${row.label} style=${{background:i%2===0?'transparent':'var(--sf2)'}}>
-                  <td style=${{padding:'9px 12px',color:'var(--tx2)',fontWeight:500}}>${row.label}</td>
+              ${Object.entries(perms).map(([label,roleMap],i)=>html`
+                <tr key=${label} style=${{background:i%2===0?'transparent':'var(--sf2)'}}>
+                  <td style=${{padding:'9px 12px',color:'var(--tx2)',fontWeight:500,fontSize:12}}>${label}</td>
                   ${['Admin','TeamLead','Developer','Tester','Viewer'].map(r=>html`
                     <td key=${r} style=${{padding:'9px 12px',textAlign:'center'}}>
-                      ${row.perms[r]
-                        ?html`<span style=${{color:'var(--gn)',fontSize:16}}>✓</span>`
-                        :html`<span style=${{color:'var(--tx3)',fontSize:14,opacity:.4}}>—</span>`}
+                      <label style=${{cursor:r==='Admin'?'not-allowed':'pointer',display:'inline-flex',alignItems:'center',justifyContent:'center'}}>
+                        <input type="checkbox" checked=${!!roleMap[r]} disabled=${r==='Admin'}
+                          onChange=${()=>togglePerm(label,r)}
+                          style=${{width:16,height:16,accentColor:'var(--ac)',cursor:r==='Admin'?'not-allowed':'pointer'}}/>
+                      </label>
                     </td>`)}
                 </tr>`)}
             </tbody>
           </table>
         </div>
         <div style=${{marginTop:12,padding:'9px 13px',background:'rgba(170,255,0,.05)',borderRadius:9,border:'1px solid rgba(170,255,0,.15)',fontSize:12,color:'var(--tx3)'}}>
-          💡 Permissions are role-based. Assign roles to team members in the <b style=${{color:'var(--tx2)'}}>Team</b> tab.
+          💡 Changes save automatically. Assign roles in the <b style=${{color:'var(--tx2)'}}>Team</b> tab.
         </div>
       </div>
 
@@ -3603,6 +3875,7 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload,initialView}){
   const [busy,setBusy]=useState(true);
   const [showAdd,setShowAdd]=useState(false);
   const [addTaskId,setAddTaskId]=useState('');
+  const [addCustomTitle,setAddCustomTitle]=useState('');
   const [addDate,setAddDate]=useState('');
   const [addTime,setAddTime]=useState('');
   const [addMins,setAddMins]=useState(10);
@@ -3645,16 +3918,18 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload,initialView}){
   };
 
   const saveReminder=async()=>{
-    if(!addTaskId||!addDate||!addTime){return;}
+    if((!addTaskId&&!addCustomTitle.trim())||!addDate||!addTime){return;}
     setSaving(true);
     const dt=new Date(addDate+'T'+addTime);
-    const task=safe(tasks).find(t=>t.id===addTaskId);
-    await api.post('/api/reminders',{task_id:addTaskId,task_title:(task&&task.title)||'Reminder',remind_at:dt.toISOString(),minutes_before:addMins});
+    const task=addTaskId?safe(tasks).find(t=>t.id===addTaskId):null;
+    const title=task?task.title:(addCustomTitle.trim()||'Reminder');
+    await api.post('/api/reminders',{task_id:addTaskId||'',task_title:title,remind_at:dt.toISOString(),minutes_before:addMins});
     setSaving(false);
     setShowAdd(false);
-    setAddTaskId('');setAddDate('');setAddTime('');setAddMins(10);
+    setAddTaskId('');setAddCustomTitle('');setAddDate('');setAddTime('');setAddMins(10);
     load();
   };
+
 
   const active=reminders.filter(r=>!r.fired);
   const completed=reminders.filter(r=>r.fired);
@@ -3720,12 +3995,17 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload,initialView}){
                 </select>
               </div>
               <div>
-                <label class="lbl">Task *</label>
-                <select class="inp" value=${addTaskId} onChange=${e=>setAddTaskId(e.target.value)}>
-                  <option value="">— Select a task —</option>
+                <label class="lbl">Task <span style=${{color:'var(--tx3)',fontWeight:400}}>(optional)</span></label>
+                <select class="inp" value=${addTaskId} onChange=${e=>{setAddTaskId(e.target.value);if(e.target.value)setAddCustomTitle('');}}>
+                  <option value="">— Select a task (or set custom below) —</option>
                   ${filteredTasks.map(t=>html`<option key=${t.id} value=${t.id}>${t.title}</option>`)}
                 </select>
               </div>
+              ${!addTaskId?html`
+                <div>
+                  <label class="lbl">Custom Reminder Title *</label>
+                  <input class="inp" value=${addCustomTitle} onInput=${e=>setAddCustomTitle(e.target.value)} placeholder="e.g. Team standup, Review designs, Call client…"/>
+                </div>`:null}
               <div style=${{display:'grid',gridTemplateColumns:'1fr 1fr',gap:11}}>
                 <div>
                   <label class="lbl">Date *</label>
@@ -3749,8 +4029,8 @@ function RemindersView({cu,tasks,projects,onSetReminder,onReload,initialView}){
                 🔔 You'll get a browser notification + sound ${addMins} min before the reminder time.
               </div>
               <div style=${{display:'flex',gap:9,justifyContent:'flex-end',paddingTop:4}}>
-                <button class="btn bg" onClick=${()=>setShowAdd(false)}>Cancel</button>
-                <button class="btn bp" onClick=${saveReminder} disabled=${saving||!addTaskId||!addDate||!addTime}>
+                <button class="btn bg" onClick=${()=>{setShowAdd(false);setAddCustomTitle('');setAddTaskId('');}}>Cancel</button>
+                <button class="btn bp" onClick=${saveReminder} disabled=${saving||(!addTaskId&&!addCustomTitle.trim())||!addDate||!addTime}>
                   ${saving?'Saving...':'Set Reminder'}
                 </button>
               </div>
@@ -4599,6 +4879,21 @@ function HuddleCall({cu,users,onStateChange,cmdRef}){
 function App(){
   const [dark,setDark]=useState(false);const [cu,setCu]=useState(null);const [loading,setLoading]=useState(true);
   const [view,setView]=useState('dashboard');const [col,setCol]=useState(false);
+  // Restore saved accent color on mount
+  useEffect(()=>{
+    try{
+      const saved=JSON.parse(localStorage.getItem('pf_accent')||'null');
+      if(saved&&saved.ac){
+        const r=document.documentElement.style;
+        r.setProperty('--ac',saved.ac);r.setProperty('--ac2',saved.ac2||saved.ac);
+        const hex=saved.ac.replace('#','');const bigint=parseInt(hex,16);
+        const ri=Math.round((bigint>>16)&255),gi=Math.round((bigint>>8)&255),bi=Math.round(bigint&255);
+        r.setProperty('--ac3','rgba('+ri+','+gi+','+bi+',.10)');
+        r.setProperty('--ac4','rgba('+ri+','+gi+','+bi+',.06)');
+        r.setProperty('--ac-tx',saved.tx||'#0d1f00');
+      }
+    }catch(e){}
+  },[]);
   const [data,setData]=useState({users:[],projects:[],tasks:[],notifs:[]});
   const [dmUnread,setDmUnread]=useState([]);const [wsName,setWsName]=useState('');
   const [showReminders,setShowReminders]=useState(false);const [reminderTask,setReminderTask]=useState(null);const [upcomingReminders,setUpcomingReminders]=useState([]);

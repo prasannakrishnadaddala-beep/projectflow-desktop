@@ -135,7 +135,7 @@ def _seed_demo(db, ws_id):
         ("u4","David Kim",   "david@dev.io",hash_pw("pass123"),"Developer","DK","#d97706"),
         ("u5","Eva Wilson",  "eva@dev.io",  hash_pw("pass123"),"Viewer",   "EW","#dc2626"),
     ]:
-        try: db.execute("INSERT INTO users VALUES (?,?,?,?,?,?,?,?,?,?)",(u[0],ws_id,*u[1:],ts(),None))
+        try: db.execute("INSERT INTO users VALUES (?,?,?,?,?,?,?,?,?)",(u[0],ws_id,*u[1:],ts()))
         except: pass
     for p in [
         ("p1","E-Commerce Platform",   "Modern e-commerce with payment integration & inventory.",       "u1",'["u1","u2","u3","u4"]',"2025-01-15","2025-06-30",65,"#7c3aed"),
@@ -230,9 +230,9 @@ def register():
         return jsonify({"error":"Invalid mode"}),400
     try:
         with get_db() as db:
-            db.execute("INSERT INTO users VALUES (?,?,?,?,?,?,?,?,?,?)",
+            db.execute("INSERT INTO users VALUES (?,?,?,?,?,?,?,?,?)",
                        (uid,ws_id,d["name"],d["email"],hash_pw(d["password"]),
-                        d.get("role","Developer"),av,c,ts(),None))
+                        d.get("role","Developer"),av,c,ts()))
             session.permanent=True
             session["user_id"]=uid
             session["workspace_id"]=ws_id
@@ -304,9 +304,9 @@ def add_user():
     c=random.choice(CLRS)
     try:
         with get_db() as db:
-            db.execute("INSERT INTO users VALUES (?,?,?,?,?,?,?,?,?,?)",
+            db.execute("INSERT INTO users VALUES (?,?,?,?,?,?,?,?,?)",
                        (uid,wid(),d["name"],d["email"],hash_pw(d["password"]),
-                        d.get("role","Developer"),av,c,ts(),None))
+                        d.get("role","Developer"),av,c,ts()))
             return jsonify({"id":uid,"workspace_id":wid(),"name":d["name"],
                             "email":d["email"],"role":d.get("role","Developer"),"avatar":av,"color":c})
     except Exception as e:
@@ -1514,6 +1514,12 @@ function Sidebar({cu,view,setView,onLogout,unread,dmUnread,col,setCol,wsName,cal
           onMouseEnter=${e=>{if(view!=='settings'){e.currentTarget.style.background='rgba(255,255,255,.07)';e.currentTarget.style.color='rgba(255,255,255,.75)';}}}
           onMouseLeave=${e=>{if(view!=='settings'){e.currentTarget.style.background='transparent';e.currentTarget.style.color='rgba(255,255,255,.32)';}}}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+        <button title="Sign Out" onClick=${()=>onLogout&&onLogout()}
+          style=${{width:40,height:40,borderRadius:12,border:'none',cursor:'pointer',background:'transparent',color:'rgba(239,68,68,.5)',display:'flex',alignItems:'center',justifyContent:'center',transition:'all .14s'}}
+          onMouseEnter=${e=>{e.currentTarget.style.background='rgba(239,68,68,.12)';e.currentTarget.style.color='#ef4444';}}
+          onMouseLeave=${e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.color='rgba(239,68,68,.5)';}}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         </button>
       </div>
     </aside>`;
@@ -3869,34 +3875,21 @@ function HuddleCall({cu,users,onStateChange,cmdRef}){
           <!-- Gradient background -->
           <div style=${{position:'absolute',inset:0,background:'radial-gradient(ellipse at 10% 40%,rgba(170,255,0,.15) 0%,transparent 55%),radial-gradient(ellipse at 85% 15%,rgba(251,146,60,.12) 0%,transparent 50%),radial-gradient(ellipse at 50% 85%,rgba(34,197,94,.08) 0%,transparent 50%)',pointerEvents:'none'}}></div>
           <!-- Participant tiles -->
-          <div style=${{flex:1,display:'flex',flexDirection:screenSharing?'column':'row',flexWrap:screenSharing?'nowrap':'wrap',gap:10,padding:'14px',alignContent:'center',justifyContent:'center',position:'relative',zIndex:1,overflow:'hidden'}}>
-            <!-- Screen share tile — shown first so it takes priority space -->
-            ${screenSharing?html`
-              <div style=${{width:'100%',flex:'1 1 auto',minHeight:200,borderRadius:12,overflow:'hidden',border:'2px solid rgba(170,255,0,.4)',background:'#000',position:'relative',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
-                <video ref=${screenVideoRef} autoPlay playsInline muted style=${{width:'100%',height:'100%',objectFit:'contain',display:'block'}}></video>
-                <div style=${{position:'absolute',top:7,left:7,background:'rgba(170,255,0,.7)',borderRadius:6,padding:'2px 9px',fontSize:10,color:'#fff',fontWeight:700}}>📺 You are sharing</div>
-              </div>`:null}
-            <!-- Participant tiles row -->
-            <div style=${{display:'flex',flexWrap:'wrap',gap:10,justifyContent:'center',flexShrink:0}}>
+          <div style=${{flex:1,display:'flex',flexWrap:'wrap',gap:10,padding:'14px',alignContent:'center',justifyContent:'center',position:'relative',zIndex:1}}>
             ${partUsers.map(u=>{
-              const tileW=screenSharing?(partUsers.length<=2?160:120):partUsers.length===1?360:partUsers.length<=2?320:partUsers.length<=4?220:160;
-              const tileH=screenSharing?90:partUsers.length===1?280:partUsers.length<=2?240:partUsers.length<=4?170:130;
+              const tileW=partUsers.length===1?360:partUsers.length<=2?320:partUsers.length<=4?220:160;
+              const tileH=partUsers.length===1?280:partUsers.length<=2?240:partUsers.length<=4?170:130;
               return html`
               <div key=${u.id} style=${{position:'relative',width:tileW,height:tileH,borderRadius:14,overflow:'hidden',background:'rgba(255,255,255,.05)',border:'2px solid '+(speaking[u.id]?'#22c55e':'rgba(255,255,255,.07)'),transition:'border-color .2s,box-shadow .2s',boxShadow:speaking[u.id]?'0 0 0 3px rgba(34,197,94,.2)':'none',flexShrink:0}}>
                 <!-- Video element for this remote user -->
                 ${u.id!==cu.id?html`<video ref=${el=>{if(el)remoteVideoRefs.current[u.id]=el;}} autoPlay playsInline style=${{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover'}}></video>`:null}
                 ${u.id===cu.id&&videoOn?html`<video ref=${localVideoRef} autoPlay playsInline muted style=${{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover'}}></video>`:null}
                 <!-- Avatar fallback (shown when no video) -->
-                ${(()=>{
-                  // Show avatar when: local user with video off, OR remote user with no video stream yet
-                  const hasVideo = u.id===cu.id ? videoOn : !!(remoteVideoRefs.current[u.id]&&remoteVideoRefs.current[u.id].srcObject);
-                  const avatarOpacity = hasVideo ? 0 : 1;
-                  return html`<div style=${{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',zIndex:1,pointerEvents:'none',background:hasVideo?'transparent':'rgba(20,20,40,.6)',transition:'background .3s'}}>
-                    ${u.avatar_data&&u.avatar_data.startsWith('data:image')?
-                      html`<img src=${u.avatar_data} style=${{width:partUsers.length<=2?72:52,height:partUsers.length<=2?72:52,borderRadius:'50%',objectFit:'cover',border:'2.5px solid rgba(255,255,255,.2)',opacity:avatarOpacity,transition:'opacity .3s'}}/>`:
-                      html`<div style=${{width:partUsers.length<=2?72:52,height:partUsers.length<=2?72:52,borderRadius:'50%',background:u.color||'#aaff00',display:'flex',alignItems:'center',justifyContent:'center',fontSize:partUsers.length<=2?26:20,fontWeight:700,color:'#fff',border:'2.5px solid rgba(255,255,255,.15)',opacity:avatarOpacity,transition:'opacity .3s'}}>${(u.avatar||u.name||'?')[0]}</div>`}
-                  </div>`;
-                })()}
+                <div style=${{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',zIndex:1,pointerEvents:'none',background:'rgba(20,20,40,.3)'}}>
+                  ${u.avatar_data&&u.avatar_data.startsWith('data:image')?
+                    html`<img src=${u.avatar_data} style=${{width:partUsers.length<=2?72:52,height:partUsers.length<=2?72:52,borderRadius:'50%',objectFit:'cover',border:'2.5px solid rgba(255,255,255,.2)',opacity:(u.id===cu.id&&videoOn)||u.id!==cu.id?0:1,transition:'opacity .3s'}}/>`:
+                    html`<div style=${{width:partUsers.length<=2?72:52,height:partUsers.length<=2?72:52,borderRadius:'50%',background:u.color||'#aaff00',display:'flex',alignItems:'center',justifyContent:'center',fontSize:partUsers.length<=2?26:20,fontWeight:700,color:'#fff',border:'2.5px solid rgba(255,255,255,.15)'}}>${(u.avatar||u.name||'?')[0]}</div>`}
+                </div>
                 <!-- Name + indicator -->
                 <div style=${{position:'absolute',bottom:7,left:7,right:7,zIndex:3,display:'flex',alignItems:'center',gap:5}}>
                   <div style=${{flex:1,background:'rgba(0,0,0,.6)',backdropFilter:'blur(6px)',borderRadius:8,padding:'3px 8px',display:'flex',alignItems:'center',gap:5,minWidth:0}}>
@@ -3905,7 +3898,12 @@ function HuddleCall({cu,users,onStateChange,cmdRef}){
                   </div>
                 </div>
               </div>`;})}
-            </div>
+            <!-- Screen share tile -->
+            ${screenSharing?html`
+              <div style=${{width:'100%',height:160,borderRadius:12,overflow:'hidden',border:'2px solid rgba(170,255,0,.4)',background:'#000',position:'relative',flexShrink:0}}>
+                <video ref=${screenVideoRef} autoPlay playsInline muted style=${{width:'100%',height:'100%',objectFit:'contain'}}></video>
+                <div style=${{position:'absolute',top:7,left:7,background:'rgba(170,255,0,.7)',borderRadius:6,padding:'2px 9px',fontSize:10,color:'#fff',fontWeight:700}}>📺 You are sharing</div>
+              </div>`:null}
           </div>
           <!-- Side panels -->
           ${showParticipants||showInvite?html`
@@ -4011,7 +4009,7 @@ function HuddleCall({cu,users,onStateChange,cmdRef}){
 
 /* ─── App ─────────────────────────────────────────────────────────────────── */
 function App(){
-  const [dark,setDark]=useState(true);const [cu,setCu]=useState(null);const [loading,setLoading]=useState(true);
+  const [dark,setDark]=useState(false);const [cu,setCu]=useState(null);const [loading,setLoading]=useState(true);
   const [view,setView]=useState('dashboard');const [col,setCol]=useState(false);
   const [data,setData]=useState({users:[],projects:[],tasks:[],notifs:[]});
   const [dmUnread,setDmUnread]=useState([]);const [wsName,setWsName]=useState('');
@@ -4350,35 +4348,19 @@ def open_browser(port):
     webbrowser.open(f"http://localhost:{port}")
 
 if __name__=="__main__":
-    # Support PROJECTFLOW_DATA env var
-    _data_env = os.environ.get("PROJECTFLOW_DATA")
-    if _data_env and os.path.isdir(_data_env):
-        DATA_DIR   = _data_env
-        DB         = os.path.join(DATA_DIR, "projectflow.db")
-        UPLOAD_DIR = os.path.join(DATA_DIR, "pf_uploads")
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-    print("\n\u26a1 ProjectFlow v4.0 \u2014 starting...")
+    print("\n⚡ ProjectFlow v4.0 — Multi-Tenant | AI | Workspaces")
+    print("="*54)
+    print("  Initializing database...")
     init_db()
+    print("  Checking JS libraries...")
     if not download_js():
-        print("  \u26a0 Some JS libraries failed to download.")
-
-    # Port priority: Railway $PORT > --electron arg > PROJECTFLOW_PORT > auto
-    _electron_mode = "--electron" in sys.argv
-    _port_arg = next((int(a) for a in sys.argv[1:] if a.isdigit()), None)
-    _port_env = os.environ.get("PORT") or os.environ.get("PROJECTFLOW_PORT")
-
-    if _port_arg:
-        port = _port_arg
-    elif _port_env and str(_port_env).isdigit():
-        port = int(_port_env)
-    else:
-        port = find_free_port(5000)
-
-    print(f"  \u2713 Listening on port {port}")
-    if not _electron_mode:
-        threading.Thread(target=open_browser, args=(port,), daemon=True).start()
-
-    # On Railway bind 0.0.0.0; in Electron mode bind localhost only
-    host = "127.0.0.1" if _electron_mode else "0.0.0.0"
-    app.run(host=host, port=port, debug=False, use_reloader=False)
+        print("  ⚠ Some libraries failed. Check your internet connection.")
+    port=find_free_port(5000)
+    print(f"\n  ✓ Running at  http://localhost:{port}")
+    print(f"  ✓ Database:   {DB}")
+    print(f"  ✓ Uploads:    {UPLOAD_DIR}")
+    print(f"\n  Demo: alice@dev.io / pass123 (Admin)")
+    print(f"  New company? Click 'Create Account' → 'New Workspace'")
+    print(f"  Invite others? Share your code from Settings ⚙\n")
+    threading.Thread(target=open_browser,args=(port,),daemon=True).start()
+    app.run(host="0.0.0.0",port=port,debug=False,use_reloader=False)

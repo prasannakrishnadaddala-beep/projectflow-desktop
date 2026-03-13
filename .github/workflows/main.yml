@@ -62,7 +62,6 @@ jobs:
               else:
                   print(f"  WARNING: {src} not found!")
 
-          # tauri.conf.json with package block (required by some Tauri v2 CLI versions)
           tauri_conf = {
             "$schema": "https://schema.tauri.app/config/2",
             "productName": "ProjectFlow",
@@ -83,9 +82,7 @@ jobs:
             }
           }
           Path("src-tauri/tauri.conf.json").write_text(json.dumps(tauri_conf, indent=2))
-          print("  wrote tauri.conf.json")
 
-          # Write src-tauri/Cargo.toml
           cargo = textwrap.dedent("""
               [package]
               name = "projectflow"
@@ -114,10 +111,8 @@ jobs:
               serde_json = "1"
           """).strip()
           Path("src-tauri/Cargo.toml").write_text(cargo)
-          print("  wrote Cargo.toml")
-
           Path("Cargo.toml").write_text('[workspace]\nmembers = ["src-tauri"]\nresolver = "2"\n')
-          print("  wrote root workspace Cargo.toml")
+          print("Structure ready")
 
       - name: Generate icons
         run: |
@@ -132,11 +127,9 @@ jobs:
             sed -i "s|https://web-production-3431b.up.railway.app|${URL}|g" src-tauri/src/lib.rs
           fi
 
-      - name: Show Tauri CLI version
-        run: tauri --version
-
       - name: Build Tauri app
-        run: tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.conf.json
+        working-directory: src-tauri
+        run: tauri build --target x86_64-pc-windows-msvc
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
 
